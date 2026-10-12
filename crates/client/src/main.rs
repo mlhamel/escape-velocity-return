@@ -1,6 +1,8 @@
 mod hud;
 mod input;
 mod screenshots;
+mod sky;
+mod sky_gen;
 mod textures;
 mod tour;
 mod visuals;
@@ -57,13 +59,21 @@ fn main() {
     evr_protocol::register(&mut app);
 
     app.add_plugins((
-        textures::TexturesPlugin,
         visuals::VisualsPlugin,
         input::InputPlugin,
         hud::HudPlugin,
         screenshots::ScreenshotPlugin,
+        sky::SkyPlugin,
     ));
-    app.add_systems(Startup, (spawn_camera, visuals::spawn_starfield));
+    app.add_systems(
+        Startup,
+        (
+            spawn_camera,
+            textures::create_textures,
+            visuals::spawn_starfield,
+        )
+            .chain(),
+    );
     if capture_tour {
         app.add_plugins(tour::CaptureTourPlugin);
     }
@@ -113,6 +123,9 @@ fn main() {
             evr_server::EMBEDDED_CLIENT_ID as u64
         }
     };
+    let content_pack = evr_data::ContentPack::load_dir(std::path::Path::new("content"))
+        .expect("content pack must load");
+    app.insert_resource(input::ClientContent(content_pack));
     app.insert_resource(MyNetworkId(my_id));
 
     app.run();

@@ -10,18 +10,26 @@ pub struct Textures {
     pub glow: Handle<Image>,
 }
 
-pub struct TexturesPlugin;
-
-impl Plugin for TexturesPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Startup, create_textures);
-    }
-}
-
-fn create_textures(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+pub(crate) fn create_textures(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    content: Res<crate::input::ClientContent>,
+) {
     let ship = images.add(ship_image(96));
     let planet = images.add(planet_image(128));
     let glow = images.add(glow_image(64));
+    for system in &content.0.systems {
+        for accent in crate::sky_gen::nebula_accents(&system.id, 3) {
+            let mut nebula = Sprite::from_image(glow.clone());
+            nebula.color = accent.color;
+            nebula.custom_size = Some(Vec2::splat(accent.size));
+            commands.spawn((
+                nebula,
+                Transform::from_xyz(accent.position.x, accent.position.y, crate::sky::SKY_Z),
+            ));
+        }
+    }
+
     commands.insert_resource(Textures { ship, planet, glow });
 }
 
@@ -146,7 +154,7 @@ fn point_in_polygon(point: (f32, f32), vertices: &[(f32, f32)]) -> bool {
     inside
 }
 
-fn image_from_rgba(size: u32, data: Vec<u8>) -> Image {
+pub(crate) fn image_from_rgba(size: u32, data: Vec<u8>) -> Image {
     Image::new(
         Extent3d {
             width: size,

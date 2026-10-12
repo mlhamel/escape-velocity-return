@@ -67,6 +67,25 @@ pub fn validate_reference(
 }
 
 pub fn validate_asset(assets_root: &std::path::Path, sprite: &str) -> Result<(), ContentError> {
+    let invalid_path = sprite
+        .split('/')
+        .any(|segment| segment == ".." || segment.is_empty());
+    let has_image_ext = ["png", "jpg", "jpeg"]
+        .iter()
+        .any(|ext| sprite.to_ascii_lowercase().ends_with(&format!(".{ext}")));
+    let valid_kind = if invalid_path {
+        Some("asset (invalid path)")
+    } else if !has_image_ext {
+        Some("asset (not an image)")
+    } else {
+        None
+    };
+    if let Some(kind) = valid_kind {
+        return Err(ContentError::UnknownReference {
+            kind,
+            id: sprite.to_owned(),
+        });
+    }
     if assets_root.join(sprite).is_file() {
         Ok(())
     } else {

@@ -254,7 +254,7 @@ fn camera_follow(
         return;
     };
     for mut transform in &mut camera {
-        transform.translation = position.0.extend(1000.0);
+        transform.translation = position.0.extend(0.0);
     }
 }
 

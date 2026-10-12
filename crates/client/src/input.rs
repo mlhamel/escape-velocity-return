@@ -24,16 +24,9 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InputState>()
-            .add_systems(Startup, load_client_content)
             .add_systems(Update, poll_flight_input)
             .add_systems(Update, poll_action_input);
     }
-}
-
-fn load_client_content(mut commands: Commands) {
-    let pack = ContentPack::load_dir(std::path::Path::new("content"))
-        .expect("client content pack must load");
-    commands.insert_resource(ClientContent(pack));
 }
 
 fn poll_flight_input(

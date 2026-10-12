@@ -108,6 +108,53 @@ fn missing_sprite_asset_is_rejected() {
 }
 
 #[test]
+fn invalid_asset_paths_are_rejected() {
+    let dir = std::env::temp_dir().join(format!("evr-data-asset-test-{}", std::process::id()));
+    let assets = dir.join("assets/textures");
+    let content = dir.join("content");
+    fs::create_dir_all(&assets).expect("dirs must be creatable");
+    fs::create_dir_all(&content).expect("dirs must be creatable");
+    fs::write(
+        content.join("manifest.ron"),
+        r#"( id: "t", name: "t", version: (0, 1, 0), ships: [], systems: ["a.ron"], outfits: [] )"#,
+    )
+    .expect("manifest must be writable");
+
+    for (sprite, kind) in [
+        ("textures/../../secret.png", "asset (invalid path)"),
+        ("textures/ship.txt", "asset (not an image)"),
+        ("textures/missing.png", "asset"),
+    ] {
+        fs::write(
+            content.join("ship.ron"),
+            format!(
+                r#"( id: "s", name: "S", description: "", price: 1, mass: 1.0, turn_rate: 1.0, acceleration: 1.0, max_speed: 1.0, max_shields: 1.0, max_armor: 1.0, fuel: 1, cargo: 1, weapon_slots: 1, sprite: Some("{sprite}") )"#
+            ),
+        )
+        .expect("ship must be writable");
+        fs::write(
+            content.join("manifest.ron"),
+            r#"( id: "t", name: "t", version: (0, 1, 0), ships: ["ship.ron"], systems: [], outfits: [] )"#,
+        )
+        .expect("manifest must be writable");
+
+        let result = ContentPack::load_dir(&content);
+        assert!(
+            matches!(
+                &result,
+                Err(ContentError::UnknownReference {
+                    kind: found_kind,
+                    ..
+                }) if *found_kind == kind
+            ),
+            "sprite {sprite}: expected {kind}, got {result:?}"
+        );
+    }
+
+    fs::remove_dir_all(&dir).expect("temp dir must be removable");
+}
+
+#[test]
 fn non_reciprocal_links_are_rejected() {
     let dir = std::env::temp_dir().join(format!("evr-data-link-test-{}", std::process::id()));
     fs::create_dir_all(&dir).expect("temp dir must be creatable");

@@ -28,6 +28,24 @@ the names and sizes, and the game picks them up automatically.
 - Ship sprites render at ~30 px world size; planets at `radius * 2`
 - File name should match the content id — makes replacement obvious
 
+## Skies
+
+Every star system gets a procedurally generated night sky (`crates/client/src/sky_gen.rs`)
+— no image assets needed. The seed is derived from the system id, so:
+
+- every player generates a pixel-identical sky for the same system
+- every system looks distinct automatically (band position, width, density,
+  cloud stretch, palette warmth, star field, clusters, one distant galaxy)
+- the same world position always maps to the same sky region
+
+The sky renders as a fullscreen background behind all world entities (z=-30)
+and follows the camera. Generated at 64x64 and stretched to the viewport —
+larger textures don't render reliably on all GPUs.
+
+Art direction lives in the generator constants: star color-temperature
+spread, band palette warmth, cluster count, spike frequency. Designers
+tweak numbers, not pixels.
+
 ## Regenerating placeholders
 
 ```bash

@@ -28,6 +28,7 @@ bevy = { workspace = true, default-features = false, features = [
     "audio",
     "bevy_gilrs",
     "serialize",
+    "png",
 ] }
 bevy_replicon.workspace = true
 bevy_replicon_renet2.workspace = true
