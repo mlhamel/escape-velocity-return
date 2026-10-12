@@ -16,6 +16,8 @@ pub struct PlanetDef {
     pub id: String,
     pub name: String,
     pub description: String,
+    #[serde(default)]
+    pub sprite: Option<String>,
     pub commodities: Vec<CommodityPrice>,
 }
 

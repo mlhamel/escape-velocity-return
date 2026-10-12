@@ -1,18 +1,17 @@
 # Economy
 
-[draft] — concrete numbers land with M3 (shared economy)
+[active] — baseline trading live (M1)
 
-## Baseline (EV DNA)
+## Baseline (live)
 
-- Commodities: food, machinery, medicine, ... defined per-planet with prices
-- Buy low / sell high across systems; hyperjumps cost fuel
-- Reading the market spread is the trader's core skill
+- Commodities per planet with fixed list prices; buy and sell at list
+- The first profitable loop: buy food @ 8 on Earth, sell @ 14 at Newhaven;
+  buy machinery @ 30 at Newhaven, sell @ 45 on Earth
+- Landing refuels at 1 cr per unit of fuel
+- Credits survive death; cargo does not
 
-## Shared economy (MMO)
+## Shared economy (MMO) — M3
 
 - Prices respond to actual player trading: selling floods, buying drains
 - NPC freighters exploit stale routes, keeping spreads from being permanent
-- See shared-economy.md for MMO dynamics
-
-Commodity definitions move into `content/commodities/` when the economy
-milestone lands; today prices are inline per-planet entries.
+- Commodity definitions move into `content/commodities/` when this lands

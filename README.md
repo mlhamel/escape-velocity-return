@@ -31,8 +31,8 @@ Agents: start at [AGENTS.md](AGENTS.md). Humans: start at
 
 ## Milestones
 
-- **M0** — workspace + content pipeline (this)
-- **M1** — offline vertical slice: fly, trade, fight, hyperjump in one system
+- **M0** — workspace + content pipeline ✅
+- **M1** — offline vertical slice: fly, trade, fight, hyperjump ✅
 - **M2** — real networking: standalone server, 2+ players, govt-zone PvP
 - **M3** — persistence: accounts, shared economy, multi-system shard
 - **M4** — community playtest: faction meta-game, ops

@@ -7,6 +7,7 @@ pub enum ContentError {
     Io(std::io::Error),
     Parse { path: PathBuf, message: String },
     DuplicateId { kind: &'static str, id: String },
+    UnknownReference { kind: &'static str, id: String },
 }
 
 impl fmt::Display for ContentError {
@@ -17,6 +18,7 @@ impl fmt::Display for ContentError {
                 write!(f, "parse error in {}: {message}", path.display())
             }
             Self::DuplicateId { kind, id } => write!(f, "duplicate {kind} id: {id}"),
+            Self::UnknownReference { kind, id } => write!(f, "unknown {kind} reference: {id}"),
         }
     }
 }
@@ -47,4 +49,30 @@ pub fn validate_ids(
         }
     }
     Ok(())
+}
+
+pub fn validate_reference(
+    kind: &'static str,
+    id: &str,
+    known: &HashSet<String>,
+) -> Result<(), ContentError> {
+    if known.contains(id) {
+        Ok(())
+    } else {
+        Err(ContentError::UnknownReference {
+            kind,
+            id: id.to_owned(),
+        })
+    }
+}
+
+pub fn validate_asset(assets_root: &std::path::Path, sprite: &str) -> Result<(), ContentError> {
+    if assets_root.join(sprite).is_file() {
+        Ok(())
+    } else {
+        Err(ContentError::UnknownReference {
+            kind: "asset",
+            id: sprite.to_owned(),
+        })
+    }
 }

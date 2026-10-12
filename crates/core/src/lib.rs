@@ -4,22 +4,51 @@ use glam::Vec2;
 pub struct ShipState {
     pub position: Vec2,
     pub velocity: Vec2,
+    pub rotation: f32,
     pub shields: f32,
     pub max_shields: f32,
     pub armor: f32,
     pub max_armor: f32,
+    pub fuel: f32,
+    pub max_fuel: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FlightModel {
+    pub turn_rate: f32,
+    pub acceleration: f32,
+    pub max_speed: f32,
+    pub drag: f32,
 }
 
 impl ShipState {
-    pub fn new(max_shields: f32, max_armor: f32) -> Self {
+    pub fn new(max_shields: f32, max_armor: f32, max_fuel: f32) -> Self {
         Self {
             position: Vec2::ZERO,
             velocity: Vec2::ZERO,
+            rotation: 0.0,
             shields: max_shields,
             max_shields,
             armor: max_armor,
             max_armor,
+            fuel: max_fuel,
+            max_fuel,
         }
+    }
+
+    pub fn heading(&self) -> Vec2 {
+        Vec2::new(self.rotation.cos(), self.rotation.sin())
+    }
+
+    pub fn apply_control(&mut self, turn: f32, throttle: f32, model: &FlightModel, dt: f32) {
+        self.rotation += turn * model.turn_rate * dt;
+        self.velocity += self.heading() * throttle * model.acceleration * dt;
+        self.velocity *= (-model.drag * dt).exp();
+        let speed = self.velocity.length();
+        if speed > model.max_speed {
+            self.velocity *= model.max_speed / speed;
+        }
+        self.position += self.velocity * dt;
     }
 
     pub fn apply_damage(&mut self, amount: f32) -> bool {
@@ -32,19 +61,99 @@ impl ShipState {
         if spill > 0.0 {
             self.armor = (self.armor - spill).max(0.0);
         }
-        self.shields <= 0.0 && self.armor <= 0.0
+        self.is_destroyed()
     }
 
     pub fn regen_shields(&mut self, rate: f32, dt: f32) {
         self.shields = (self.shields + rate * dt).min(self.max_shields);
     }
 
-    pub fn advance(&mut self, dt: f32) {
-        self.position += self.velocity * dt;
+    pub fn is_destroyed(&self) -> bool {
+        self.armor <= 0.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WeaponState {
+    pub cooldown_remaining: f32,
+}
+
+impl WeaponState {
+    pub fn new() -> Self {
+        Self {
+            cooldown_remaining: 0.0,
+        }
     }
 
-    pub fn is_destroyed(&self) -> bool {
-        self.shields <= 0.0 && self.armor <= 0.0
+    pub fn tick(&mut self, dt: f32) {
+        self.cooldown_remaining = (self.cooldown_remaining - dt).max(0.0);
+    }
+
+    pub fn try_fire(&mut self, cooldown: f32) -> bool {
+        if self.cooldown_remaining <= 0.0 {
+            self.cooldown_remaining = cooldown;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Default for WeaponState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Account {
+    pub credits: u32,
+    pub cargo: Vec<(String, u32)>,
+}
+
+impl Account {
+    pub fn new(credits: u32) -> Self {
+        Self {
+            credits,
+            cargo: Vec::new(),
+        }
+    }
+
+    pub fn cargo_used(&self) -> u32 {
+        self.cargo.iter().map(|(_, qty)| qty).sum()
+    }
+
+    pub fn cargo_qty(&self, commodity: &str) -> u32 {
+        self.cargo
+            .iter()
+            .find(|(id, _)| id == commodity)
+            .map(|(_, qty)| *qty)
+            .unwrap_or(0)
+    }
+
+    pub fn add_cargo(&mut self, commodity: &str, qty: u32, capacity: u32) -> bool {
+        if self.cargo_used() + qty > capacity {
+            return false;
+        }
+        match self.cargo.iter_mut().find(|(id, _)| id == commodity) {
+            Some((_, existing)) => *existing += qty,
+            None => self.cargo.push((commodity.to_owned(), qty)),
+        }
+        true
+    }
+
+    pub fn remove_cargo(&mut self, commodity: &str, qty: u32) -> bool {
+        let Some((_, existing)) = self.cargo.iter_mut().find(|(id, _)| id == commodity) else {
+            return false;
+        };
+        if *existing < qty {
+            return false;
+        }
+        *existing -= qty;
+        if *existing == 0 {
+            self.cargo.retain(|(id, _)| id != commodity);
+        }
+        true
     }
 }
 
@@ -52,9 +161,18 @@ impl ShipState {
 mod tests {
     use super::*;
 
+    fn flight(turn_rate: f32, acceleration: f32, max_speed: f32, drag: f32) -> FlightModel {
+        FlightModel {
+            turn_rate,
+            acceleration,
+            max_speed,
+            drag,
+        }
+    }
+
     #[test]
     fn damage_is_absorbed_by_shields_first() {
-        let mut ship = ShipState::new(40.0, 25.0);
+        let mut ship = ShipState::new(40.0, 25.0, 100.0);
         let destroyed = ship.apply_damage(10.0);
         assert!(!destroyed);
         assert_eq!(ship.shields, 30.0);
@@ -63,22 +181,38 @@ mod tests {
 
     #[test]
     fn damage_spills_to_armor() {
-        let mut ship = ShipState::new(40.0, 25.0);
+        let mut ship = ShipState::new(40.0, 25.0, 100.0);
         ship.apply_damage(50.0);
         assert_eq!(ship.shields, 0.0);
         assert_eq!(ship.armor, 15.0);
     }
 
     #[test]
-    fn destruction_requires_both_pools_drained() {
-        let mut ship = ShipState::new(40.0, 25.0);
+    fn destruction_when_armor_drains() {
+        let mut ship = ShipState::new(40.0, 25.0, 100.0);
         assert!(ship.apply_damage(65.0));
         assert!(ship.is_destroyed());
     }
 
     #[test]
+    fn drained_shields_with_armor_left_survives() {
+        let mut ship = ShipState::new(40.0, 25.0, 100.0);
+        assert!(!ship.apply_damage(50.0));
+        assert_eq!(ship.shields, 0.0);
+        assert_eq!(ship.armor, 15.0);
+        assert!(!ship.is_destroyed());
+    }
+
+    #[test]
+    fn armor_zero_with_shields_up_is_destroyed() {
+        let mut ship = ShipState::new(40.0, 25.0, 100.0);
+        ship.armor = 0.0;
+        assert!(ship.is_destroyed());
+    }
+
+    #[test]
     fn overkill_damage_clamps_at_zero() {
-        let mut ship = ShipState::new(10.0, 10.0);
+        let mut ship = ShipState::new(10.0, 10.0, 100.0);
         ship.apply_damage(1000.0);
         assert_eq!(ship.shields, 0.0);
         assert_eq!(ship.armor, 0.0);
@@ -86,7 +220,7 @@ mod tests {
 
     #[test]
     fn zero_and_negative_damage_is_ignored() {
-        let mut ship = ShipState::new(40.0, 25.0);
+        let mut ship = ShipState::new(40.0, 25.0, 100.0);
         ship.apply_damage(0.0);
         ship.apply_damage(-10.0);
         assert_eq!(ship.shields, 40.0);
@@ -96,17 +230,69 @@ mod tests {
 
     #[test]
     fn shield_regen_caps_at_max() {
-        let mut ship = ShipState::new(40.0, 25.0);
+        let mut ship = ShipState::new(40.0, 25.0, 100.0);
         ship.shields = 38.0;
         ship.regen_shields(5.0, 1.0);
         assert_eq!(ship.shields, 40.0);
     }
 
     #[test]
-    fn advance_moves_position_by_velocity() {
-        let mut ship = ShipState::new(10.0, 10.0);
-        ship.velocity = Vec2::new(10.0, -5.0);
-        ship.advance(2.0);
-        assert_eq!(ship.position, Vec2::new(20.0, -10.0));
+    fn thrust_moves_ship_along_heading() {
+        let mut ship = ShipState::new(10.0, 10.0, 100.0);
+        ship.rotation = 0.0;
+        ship.apply_control(0.0, 1.0, &flight(3.0, 100.0, 200.0, 0.0), 1.0);
+        assert!(ship.position.x > 90.0);
+        assert_eq!(ship.position.y, 0.0);
+    }
+
+    #[test]
+    fn turning_rotates_heading() {
+        let mut ship = ShipState::new(10.0, 10.0, 100.0);
+        ship.apply_control(
+            1.0,
+            0.0,
+            &flight(std::f32::consts::FRAC_PI_2, 100.0, 200.0, 0.0),
+            1.0,
+        );
+        let heading = ship.heading();
+        assert!((heading.y - 1.0).abs() < 1e-5);
+        assert!(heading.x.abs() < 1e-5);
+    }
+
+    #[test]
+    fn drag_decays_velocity() {
+        let mut ship = ShipState::new(10.0, 10.0, 100.0);
+        ship.velocity = Vec2::new(100.0, 0.0);
+        ship.apply_control(0.0, 0.0, &flight(1.0, 100.0, 200.0, 0.5), 1.0);
+        let decayed = 100.0 * (-0.5_f32).exp();
+        assert!((ship.velocity.x - decayed).abs() < 1e-3);
+    }
+
+    #[test]
+    fn speed_is_clamped_to_max() {
+        let mut ship = ShipState::new(10.0, 10.0, 100.0);
+        ship.apply_control(0.0, 1.0, &flight(0.0, 1000.0, 50.0, 0.0), 1.0);
+        assert!(ship.velocity.length() <= 50.0);
+    }
+
+    #[test]
+    fn weapon_respects_cooldown() {
+        let mut weapon = WeaponState::new();
+        assert!(weapon.try_fire(0.25));
+        assert!(!weapon.try_fire(0.25));
+        weapon.tick(0.25);
+        assert!(weapon.try_fire(0.25));
+    }
+
+    #[test]
+    fn cargo_respects_capacity() {
+        let mut account = Account::new(1000);
+        assert!(account.add_cargo("food", 15, 20));
+        assert!(!account.add_cargo("food", 6, 20));
+        assert_eq!(account.cargo_qty("food"), 15);
+        assert!(account.remove_cargo("food", 15));
+        assert_eq!(account.cargo_qty("food"), 0);
+        assert!(account.cargo.is_empty());
+        assert!(!account.remove_cargo("food", 1));
     }
 }

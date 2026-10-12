@@ -1,0 +1,340 @@
+use bevy::color::Mix;
+use bevy::prelude::*;
+use bevy_replicon::prelude::*;
+use evr_protocol::{
+    Explosion, Heading, Hull, PlanetTag, Position, Projectile, ShipInfo, ShipKind, SystemMembership,
+};
+use evr_server::EMBEDDED_CLIENT_ID;
+
+use crate::input::ClientContent;
+use crate::textures::Textures;
+
+const FLASH_SECS: f32 = 0.18;
+
+pub struct VisualsPlugin;
+
+impl Plugin for VisualsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(on_explosion).add_systems(
+            Update,
+            (
+                attach_ship_visuals,
+                attach_planet_visuals,
+                attach_projectile_visuals,
+                detect_hits,
+                tick_flashes,
+                debris_flight,
+                sync_ship_transforms,
+                sync_planet_transforms,
+                sync_projectile_transforms,
+                apply_system_filter,
+                parallax,
+                camera_follow,
+            )
+                .chain(),
+        );
+    }
+}
+
+#[derive(Component)]
+struct ShipVisual;
+
+#[derive(Component)]
+struct PlanetVisual;
+
+#[derive(Component)]
+struct ProjectileVisual;
+
+#[derive(Component)]
+struct FlashState {
+    last_shields: f32,
+    last_armor: f32,
+    remaining: f32,
+}
+
+#[derive(Component)]
+struct Debris {
+    velocity: Vec2,
+    ttl: f32,
+}
+
+#[derive(Component)]
+struct StarLayer(f32);
+
+fn my_network_id() -> u64 {
+    EMBEDDED_CLIENT_ID as u64
+}
+
+fn kind_color(kind: ShipKind) -> Color {
+    match kind {
+        ShipKind::Player => Color::srgb(0.55, 1.0, 0.85),
+        ShipKind::Pirate => Color::srgb(1.0, 0.4, 0.3),
+    }
+}
+
+type AddedShips<'w, 's> =
+    Query<'w, 's, (Entity, &'static ShipInfo, &'static Hull), (Added<ShipInfo>, With<Remote>)>;
+
+fn attach_ship_visuals(
+    mut commands: Commands,
+    textures: Res<Textures>,
+    asset_server: Res<AssetServer>,
+    content: Res<ClientContent>,
+    added: AddedShips,
+) {
+    for (entity, info, hull) in &added {
+        let image = match content
+            .0
+            .ship(&info.def_id)
+            .and_then(|def| def.sprite.clone())
+        {
+            Some(path) => asset_server.load(path),
+            None => textures.ship.clone(),
+        };
+        let mut sprite = Sprite::from_image(image);
+        sprite.color = kind_color(info.kind);
+        sprite.custom_size = Some(Vec2::new(30.0, 30.0));
+        commands.entity(entity).insert((
+            ShipVisual,
+            sprite,
+            FlashState {
+                last_shields: hull.shields,
+                last_armor: hull.armor,
+                remaining: 0.0,
+            },
+        ));
+    }
+}
+
+type AddedPlanets<'w, 's> =
+    Query<'w, 's, (Entity, &'static PlanetTag), (Added<PlanetTag>, With<Remote>)>;
+
+fn attach_planet_visuals(
+    mut commands: Commands,
+    textures: Res<Textures>,
+    asset_server: Res<AssetServer>,
+    content: Res<ClientContent>,
+    added: AddedPlanets,
+) {
+    for (entity, planet) in &added {
+        let sprite_path = content
+            .0
+            .system(&planet.system)
+            .and_then(|system| system.planets.iter().find(|p| p.id == planet.id))
+            .and_then(|p| p.sprite.clone());
+        let (image, color) = match sprite_path {
+            Some(path) => (asset_server.load(path), Color::WHITE),
+            None => {
+                let palette = [
+                    Color::srgb(0.2, 0.45, 0.9),
+                    Color::srgb(0.55, 0.4, 0.3),
+                    Color::srgb(0.35, 0.55, 0.35),
+                    Color::srgb(0.6, 0.55, 0.5),
+                ];
+                let seed = planet.id.bytes().map(|b| b as usize).sum::<usize>();
+                (textures.planet.clone(), palette[seed % palette.len()])
+            }
+        };
+        let mut sprite = Sprite::from_image(image);
+        sprite.color = color;
+        sprite.custom_size = Some(Vec2::splat(planet.radius * 2.0));
+        commands.entity(entity).insert((PlanetVisual, sprite));
+    }
+}
+
+fn attach_projectile_visuals(
+    mut commands: Commands,
+    textures: Res<Textures>,
+    added: Query<Entity, (Added<Projectile>, With<Remote>)>,
+) {
+    for entity in &added {
+        let mut sprite = Sprite::from_image(textures.glow.clone());
+        sprite.custom_size = Some(Vec2::splat(9.0));
+        commands.entity(entity).insert((ProjectileVisual, sprite));
+    }
+}
+
+fn detect_hits(mut ships: Query<(&Hull, &mut FlashState), With<ShipVisual>>) {
+    for (hull, mut flash) in &mut ships {
+        if hull.shields < flash.last_shields || hull.armor < flash.last_armor {
+            flash.remaining = FLASH_SECS;
+        }
+        flash.last_shields = hull.shields;
+        flash.last_armor = hull.armor;
+    }
+}
+
+fn tick_flashes(
+    time: Res<Time>,
+    mut ships: Query<(&mut FlashState, &ShipInfo, &mut Sprite), With<ShipVisual>>,
+) {
+    let dt = time.delta_secs();
+    for (mut flash, info, mut sprite) in &mut ships {
+        if flash.remaining > 0.0 {
+            flash.remaining = (flash.remaining - dt).max(0.0);
+            let factor = flash.remaining / FLASH_SECS;
+            sprite.color = kind_color(info.kind).mix(&Color::WHITE, factor);
+        }
+    }
+}
+
+fn on_explosion(
+    trigger: On<Explosion>,
+    mut commands: Commands,
+    textures: Res<Textures>,
+    my_ships: Query<(&ShipInfo, &SystemMembership)>,
+) {
+    let Some((_, my_membership)) = my_ships
+        .iter()
+        .find(|(info, _)| info.owner == Some(my_network_id()))
+    else {
+        return;
+    };
+    if trigger.event().system != my_membership.0 {
+        return;
+    }
+    let origin = Vec2::from(trigger.event().position);
+    for index in 0..12u32 {
+        let angle = index as f32 * std::f32::consts::FRAC_PI_6 + (index % 3) as f32 * 0.17;
+        let speed = 60.0 + (index % 5) as f32 * 28.0;
+        let mut sprite = Sprite::from_image(textures.glow.clone());
+        sprite.custom_size = Some(Vec2::splat(7.0));
+        sprite.color = Color::srgba(1.0, 0.6, 0.25, 0.9);
+        commands.spawn((
+            sprite,
+            Transform::from_translation(origin.extend(5.0)),
+            Debris {
+                velocity: Vec2::new(angle.cos(), angle.sin()) * speed,
+                ttl: 0.8,
+            },
+        ));
+    }
+}
+
+fn debris_flight(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut debris: Query<(Entity, &mut Debris, &mut Transform, &mut Sprite)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut debris, mut transform, mut sprite) in &mut debris {
+        debris.ttl -= dt;
+        transform.translation += (debris.velocity * dt).extend(0.0);
+        let alpha = (debris.ttl / 0.8).clamp(0.0, 1.0);
+        sprite.color = Color::srgba(1.0, 0.6, 0.25, alpha);
+        if debris.ttl <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn sync_ship_transforms(mut ships: Query<(&Position, &Heading, &mut Transform), With<ShipVisual>>) {
+    for (position, heading, mut transform) in &mut ships {
+        transform.translation = position.0.extend(0.0);
+        transform.rotation = Quat::from_rotation_z(heading.0);
+    }
+}
+
+fn sync_planet_transforms(mut planets: Query<(&Position, &mut Transform), With<PlanetVisual>>) {
+    for (position, mut transform) in &mut planets {
+        transform.translation = position.0.extend(0.0);
+    }
+}
+
+fn sync_projectile_transforms(
+    mut projectiles: Query<(&Position, &Heading, &mut Transform), With<ProjectileVisual>>,
+) {
+    for (position, heading, mut transform) in &mut projectiles {
+        transform.translation = position.0.extend(0.0);
+        transform.rotation = Quat::from_rotation_z(heading.0);
+    }
+}
+
+fn apply_system_filter(
+    my_ships: Query<(&ShipInfo, &SystemMembership)>,
+    mut movers: Query<(&mut Visibility, &SystemMembership), Without<PlanetVisual>>,
+    mut planets: Query<(&mut Visibility, &PlanetTag), With<PlanetVisual>>,
+) {
+    let Some((_, my_membership)) = my_ships
+        .iter()
+        .find(|(info, _)| info.owner == Some(my_network_id()))
+    else {
+        return;
+    };
+    for (mut visibility, membership) in &mut movers {
+        *visibility = if membership.0 == my_membership.0 {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (mut visibility, planet) in &mut planets {
+        *visibility = if planet.system == my_membership.0 {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+fn parallax(
+    camera: Query<&Transform, (With<Camera2d>, Without<StarLayer>)>,
+    mut layers: Query<(&StarLayer, &mut Transform)>,
+) {
+    let Ok(camera) = camera.single() else {
+        return;
+    };
+    for (layer, mut transform) in &mut layers {
+        transform.translation.x = camera.translation.x * (1.0 - layer.0);
+        transform.translation.y = camera.translation.y * (1.0 - layer.0);
+    }
+}
+
+fn camera_follow(
+    my_ships: Query<(&ShipInfo, &Position)>,
+    mut camera: Query<&mut Transform, (With<Camera2d>, Without<Position>)>,
+) {
+    let Some((_, position)) = my_ships
+        .iter()
+        .find(|(info, _)| info.owner == Some(my_network_id()))
+    else {
+        return;
+    };
+    for mut transform in &mut camera {
+        transform.translation = position.0.extend(1000.0);
+    }
+}
+
+pub fn spawn_starfield(mut commands: Commands) {
+    for (factor, count, size, base_brightness) in [(0.25, 90, 2.0, 0.3), (0.55, 45, 3.0, 0.55)] {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        commands
+            .spawn((
+                StarLayer(factor),
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::default(),
+            ))
+            .with_children(|parent| {
+                for _ in 0..count {
+                    seed = seed
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    let x = (((seed >> 33) as i64 % 8000) as f32) - 4000.0;
+                    let y = (((seed >> 13) as i64 % 6000) as f32) - 3000.0;
+                    let brightness =
+                        base_brightness + (((seed >> 29) & 0xFF) as f32 / u8::MAX as f32) * 0.35;
+                    let warm = (seed >> 41) & 1 == 1;
+                    let color = if warm {
+                        Color::srgb(brightness, brightness * 0.92, brightness * 0.75)
+                    } else {
+                        Color::srgb(brightness * 0.8, brightness * 0.9, brightness)
+                    };
+                    parent.spawn((
+                        Sprite::from_color(color, Vec2::splat(size)),
+                        Transform::from_xyz(x, y, -20.0),
+                    ));
+                }
+            });
+    }
+}

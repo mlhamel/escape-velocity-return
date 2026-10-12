@@ -12,4 +12,6 @@
     fuel: 120,
     cargo: 20,
     weapon_slots: 2,
+    sprite: Some("textures/ships/shuttle.png"),
+    default_outfits: ["light-blaster"],
 )

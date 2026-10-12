@@ -1,0 +1,347 @@
+use std::time::{Duration, Instant};
+
+use bevy::prelude::*;
+use evr_protocol::{
+    AccountState, DockedAt, Fuel, Hull, Notice, PlanetTag, PlayerDied, Position, ShipInfo,
+    SystemMembership,
+};
+use evr_server::EMBEDDED_CLIENT_ID;
+use evr_server::gameplay::{JUMP_FUEL_COST, LAND_RANGE};
+
+use crate::input::ClientContent;
+
+const CYAN: Color = Color::srgb(0.55, 1.0, 0.85);
+const AMBER: Color = Color::srgb(1.0, 0.85, 0.5);
+const RED: Color = Color::srgb(1.0, 0.35, 0.3);
+const VALUE: Color = Color::srgb(0.95, 0.95, 0.95);
+const DIM: Color = Color::srgb(0.42, 0.44, 0.5);
+
+const BAR_WIDTH: f32 = 170.0;
+
+#[derive(Resource, Default)]
+struct Noticeboard {
+    text: String,
+    at: Option<Instant>,
+}
+
+#[derive(Resource)]
+struct HudLayout {
+    system_line: Entity,
+    stats_line: Entity,
+    prompt_line: Entity,
+    trade_block: Entity,
+    notice_line: Entity,
+    banner_line: Entity,
+    shield_fill: Entity,
+    armor_fill: Entity,
+    fuel_fill: Entity,
+}
+
+pub struct HudPlugin;
+
+impl Plugin for HudPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Noticeboard>()
+            .add_systems(Startup, spawn_hud)
+            .add_observer(on_notice)
+            .add_observer(on_player_died)
+            .add_systems(Update, update_hud);
+    }
+}
+
+#[derive(Default)]
+struct HudEntities {
+    system_line: Option<Entity>,
+    stats_line: Option<Entity>,
+    prompt_line: Option<Entity>,
+    trade_block: Option<Entity>,
+    notice_line: Option<Entity>,
+    banner_line: Option<Entity>,
+    shield_fill: Option<Entity>,
+    armor_fill: Option<Entity>,
+    fuel_fill: Option<Entity>,
+}
+
+fn spawn_text(
+    parent: &mut ChildSpawnerCommands,
+    text: impl Into<String>,
+    size: f32,
+    color: Color,
+) -> Entity {
+    parent
+        .spawn((
+            Text(text.into()),
+            TextFont {
+                font_size: bevy::text::FontSize::Px(size),
+                ..default()
+            },
+            TextColor(color),
+        ))
+        .id()
+}
+
+fn spawn_bar(parent: &mut ChildSpawnerCommands, label: &str, fill_color: Color) -> Entity {
+    let mut fill = None;
+    parent
+        .spawn(Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(8.0),
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|bar| {
+            spawn_text(bar, label.to_owned(), 13.0, DIM);
+            bar.spawn((
+                Node {
+                    width: Val::Px(BAR_WIDTH),
+                    height: Val::Px(9.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.08, 0.09, 0.13)),
+            ))
+            .with_children(|track| {
+                fill = Some(
+                    track
+                        .spawn((
+                            Node {
+                                width: Val::Px(BAR_WIDTH),
+                                height: Val::Px(9.0),
+                                ..default()
+                            },
+                            BackgroundColor(fill_color),
+                        ))
+                        .id(),
+                );
+            });
+        });
+    fill.expect("bar fill must be spawned")
+}
+
+fn spawn_hud(mut commands: Commands) {
+    let mut ids = HudEntities::default();
+
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(14.0),
+            left: Val::Px(16.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            ..default()
+        })
+        .with_children(|root| {
+            ids.system_line = Some(spawn_text(root, "", 26.0, CYAN));
+            ids.stats_line = Some(spawn_text(root, "", 16.0, VALUE));
+            ids.shield_fill = Some(spawn_bar(root, "shield", Color::srgb(0.3, 0.8, 1.0)));
+            ids.armor_fill = Some(spawn_bar(root, "armor", Color::srgb(0.95, 0.6, 0.3)));
+            ids.fuel_fill = Some(spawn_bar(root, "fuel", Color::srgb(0.5, 0.9, 0.4)));
+            ids.prompt_line = Some(spawn_text(root, "", 15.0, CYAN));
+            ids.trade_block = Some(spawn_text(root, "", 15.0, VALUE));
+        });
+
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(16.0),
+            left: Val::Percent(38.0),
+            ..default()
+        })
+        .with_children(|parent| {
+            ids.notice_line = Some(spawn_text(parent, "", 16.0, AMBER));
+        });
+
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(42.0),
+            left: Val::Percent(36.0),
+            ..default()
+        })
+        .with_children(|parent| {
+            ids.banner_line = Some(spawn_text(parent, "", 30.0, RED));
+        });
+
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(12.0),
+            left: Val::Px(16.0),
+            ..default()
+        })
+        .with_children(|parent| {
+            spawn_text(
+                parent,
+                "W thrust   A/D turn   Space fire   L land   U lift   J jump",
+                13.0,
+                DIM,
+            );
+        });
+
+    commands.insert_resource(HudLayout {
+        system_line: ids.system_line.expect("hud entities must exist"),
+        stats_line: ids.stats_line.expect("hud entities must exist"),
+        prompt_line: ids.prompt_line.expect("hud entities must exist"),
+        trade_block: ids.trade_block.expect("hud entities must exist"),
+        notice_line: ids.notice_line.expect("hud entities must exist"),
+        banner_line: ids.banner_line.expect("hud entities must exist"),
+        shield_fill: ids.shield_fill.expect("hud entities must exist"),
+        armor_fill: ids.armor_fill.expect("hud entities must exist"),
+        fuel_fill: ids.fuel_fill.expect("hud entities must exist"),
+    });
+}
+
+fn on_notice(trigger: On<Notice>, mut board: ResMut<Noticeboard>) {
+    board.text = trigger.event().text.clone();
+    board.at = Some(Instant::now());
+}
+
+fn on_player_died(_death: On<PlayerDied>, mut board: ResMut<Noticeboard>) {
+    board.text = "Your ship was destroyed. The yard is building you another.".to_owned();
+    board.at = Some(Instant::now());
+}
+
+type HudShips<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static ShipInfo,
+        &'static Hull,
+        &'static Fuel,
+        &'static AccountState,
+        &'static SystemMembership,
+        &'static Position,
+        Option<&'static DockedAt>,
+    ),
+>;
+
+fn set_text(texts: &mut Query<&mut Text>, entity: Entity, value: String) {
+    if let Ok(mut text) = texts.get_mut(entity) {
+        text.0 = value;
+    }
+}
+
+fn set_bar(nodes: &mut Query<&mut Node>, entity: Entity, fraction: f32) {
+    if let Ok(mut node) = nodes.get_mut(entity) {
+        node.width = Val::Px(BAR_WIDTH * fraction.clamp(0.0, 1.0));
+    }
+}
+
+fn update_hud(
+    mut texts: Query<&mut Text>,
+    mut nodes: Query<&mut Node>,
+    layout: Res<HudLayout>,
+    board: Res<Noticeboard>,
+    content: Res<ClientContent>,
+    ships: HudShips,
+    planets: Query<(&PlanetTag, &Position)>,
+) {
+    let my = ships
+        .iter()
+        .find(|(info, _, _, _, _, _, _)| info.owner == Some(EMBEDDED_CLIENT_ID as u64));
+
+    let Some((_, hull, fuel, account, membership, position, docked)) = my else {
+        set_text(&mut texts, layout.system_line, String::new());
+        set_text(&mut texts, layout.stats_line, String::new());
+        set_text(&mut texts, layout.prompt_line, String::new());
+        set_text(&mut texts, layout.trade_block, String::new());
+        set_bar(&mut nodes, layout.shield_fill, 0.0);
+        set_bar(&mut nodes, layout.armor_fill, 0.0);
+        set_bar(&mut nodes, layout.fuel_fill, 0.0);
+        set_text(&mut texts, layout.banner_line, "SHIP LOST".to_owned());
+        set_notice(&mut texts, &layout, &board);
+        return;
+    };
+
+    set_text(&mut texts, layout.banner_line, String::new());
+    set_notice(&mut texts, &layout, &board);
+
+    let system_name = content
+        .0
+        .system(&membership.0)
+        .map(|system| system.name.as_str())
+        .unwrap_or("Uncharted Space");
+    set_text(&mut texts, layout.system_line, system_name.to_owned());
+
+    let cargo_used: u32 = account.cargo.iter().map(|(_, qty)| qty).sum();
+    set_text(
+        &mut texts,
+        layout.stats_line,
+        format!(
+            "{} cr   cargo {}/{}   fuel {:.0}/{}",
+            account.credits, cargo_used, account.cargo_capacity, fuel.current, fuel.max
+        ),
+    );
+
+    set_bar(
+        &mut nodes,
+        layout.shield_fill,
+        hull.shields / hull.max_shields,
+    );
+    set_bar(&mut nodes, layout.armor_fill, hull.armor / hull.max_armor);
+    set_bar(&mut nodes, layout.fuel_fill, fuel.current / fuel.max);
+
+    let mut prompts = Vec::new();
+    let mut trade = String::new();
+    if let Some(docked_at) = docked {
+        trade.push_str(&format!("docked at {}\n", docked_at.planet));
+        let planet = content
+            .0
+            .system(&docked_at.system)
+            .and_then(|system| system.planets.iter().find(|p| p.id == docked_at.planet));
+        if let Some(planet) = planet {
+            for (index, commodity) in planet.commodities.iter().enumerate() {
+                let held = account
+                    .cargo
+                    .iter()
+                    .find(|(id, _)| id == &commodity.id)
+                    .map(|(_, qty)| qty)
+                    .copied()
+                    .unwrap_or(0);
+                trade.push_str(&format!(
+                    "  {}  buy {} @ {} cr (hold {}) — shift+{} sell\n",
+                    index + 1,
+                    commodity.id,
+                    commodity.price,
+                    held,
+                    index + 1
+                ));
+            }
+        }
+        prompts.push("U — lift off".to_owned());
+    } else {
+        let candidate = planets
+            .iter()
+            .filter(|(tag, _)| tag.system == membership.0)
+            .filter(|(tag, planet_position)| {
+                position.0.distance(planet_position.0) <= LAND_RANGE + tag.radius
+            })
+            .min_by_key(|(_, planet_position)| position.0.distance(planet_position.0).to_bits());
+        if let Some((planet, _)) = candidate {
+            prompts.push(format!("L — land on {}", planet.name));
+        }
+        let jump_target = content
+            .0
+            .system(&membership.0)
+            .and_then(|system| system.links.first())
+            .and_then(|link| content.0.system(link))
+            .map(|system| system.name.clone());
+        if let Some(target) = jump_target {
+            prompts.push(format!("J — jump to {target} ({JUMP_FUEL_COST:.0} fuel)"));
+        }
+    }
+    set_text(&mut texts, layout.prompt_line, prompts.join("   "));
+    set_text(&mut texts, layout.trade_block, trade);
+}
+
+fn set_notice(texts: &mut Query<&mut Text>, layout: &HudLayout, board: &Noticeboard) {
+    let fresh = board
+        .at
+        .is_some_and(|at| at.elapsed() < Duration::from_secs(5));
+    let text = if fresh && !board.text.is_empty() {
+        board.text.clone()
+    } else {
+        String::new()
+    };
+    set_text(texts, layout.notice_line, text);
+}

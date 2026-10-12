@@ -21,7 +21,7 @@ evr-server = { path = "crates/server" }
 
 bevy = "0.19"
 bevy_replicon = "0.41"
-bevy_replicon_renet2 = "0.19.1"
+bevy_replicon_renet2 = { version = "0.19.1", features = ["memory_transport"] }
 glam = "0.32"
 ron = "0.12"
 serde = { version = "1", features = ["derive"] }

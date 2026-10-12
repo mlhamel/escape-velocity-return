@@ -18,10 +18,12 @@ single-player.
 
 - `crates/core` — headless simulation (economy, factions, combat math); no Bevy, no I/O
 - `crates/data` — RON content loader + validation; its structs are the content schema
-- `crates/protocol` — client intents / server events; shared wire types
+- `crates/protocol` — client intents / server events + replicated components; register(app)
+  is called identically by client and server (protocol hash must match)
 - `crates/server` — authoritative simulation app (embeddable lib + standalone bin)
 - `crates/client` — Bevy desktop app
 - `content/` — RON content packs; data, never code
+- `assets/` — textures referenced by content sprite fields; placeholders generated via ops/generate_placeholder_art.py (see docs/gdd/art-guide.md)
 - `docs/gdd/` — canonical game design; README is the index
 - `docs/decisions/` — ADRs; write one before non-trivial architecture changes
 - `docs/ideas/` — idea inbox; status-tagged, never deleted
@@ -35,7 +37,8 @@ single-player.
 - Content is data in `content/`, never code. Use the add-ship/add-system skills.
 - Server is authoritative. Clients send intents (`crates/protocol`); they never
   mutate game state.
-- Offline play = embedded server over in-process transport; no second code path.
+- Offline play = the client embeds the server app (NonSendMut in evr-client) over a memory
+  transport; no second code path.
 - `evr-core` stays Bevy-free and I/O-free. Presentation belongs in `evr-client`.
 - Bevy/replicon/renet2 versions are pinned together (read docs/decisions/0005
   before upgrading). rustc >= 1.95 required by bevy 0.19.

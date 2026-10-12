@@ -4,8 +4,13 @@
     version: (0, 1, 0),
     ships: [
         "ships/shuttle.ron",
+        "ships/turncoat.ron",
     ],
     systems: [
         "systems/sol.ron",
+        "systems/alpha-centauri.ron",
+    ],
+    outfits: [
+        "outfits/light-blaster.ron",
     ],
 )

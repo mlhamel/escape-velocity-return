@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+bevy = { workspace = true, default-features = false, features = ["serialize"] }
+bevy_replicon.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

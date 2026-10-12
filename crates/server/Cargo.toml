@@ -5,8 +5,17 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-bevy = { workspace = true, default-features = false, features = ["std", "multi_threaded"] }
+bevy = { workspace = true, default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "bevy_state",
+    "serialize",
+] }
+bevy_replicon.workspace = true
+bevy_replicon_renet2.workspace = true
+evr-core.workspace = true
 evr-data.workspace = true
+evr-protocol.workspace = true
 
 [lints]
 workspace = true

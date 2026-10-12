@@ -1,0 +1,13 @@
+(
+    id: "light-blaster",
+    name: "Light Blaster",
+    description: "The cheapest way to put holes in things at a distance.",
+    price: 1200,
+    mass: 1.0,
+    kind: Weapon((
+        damage: 6.0,
+        cooldown: 0.25,
+        projectile_speed: 420.0,
+        projectile_ttl: 1.2,
+    )),
+)

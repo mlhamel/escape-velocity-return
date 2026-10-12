@@ -9,8 +9,8 @@ Status legend: **[draft]** early thinking — **[active]** being implemented —
 | Section | Status | Scope |
 |---|---|---|
 | [core-loops.md](core-loops.md) | active | the four interlocking gameplay loops |
-| [economy.md](economy.md) | draft | commodities, prices, trading |
-| [combat.md](combat.md) | draft | real-time 2D combat, energy management |
+| [economy.md](economy.md) | active | commodities, prices, trading |
+| [combat.md](combat.md) | active | real-time 2D combat, energy management |
 | [factions.md](factions.md) | draft | Confederation vs Rebellion, reputation |
 | [progression.md](progression.md) | draft | ships, upgrades, wealth curve |
 | [writing-style.md](writing-style.md) | active | tone guide for all in-game text |
@@ -18,3 +18,4 @@ Status legend: **[draft]** early thinking — **[active]** being implemented —
 | [faction-metagame.md](faction-metagame.md) | draft | MMO: collective war progress |
 | [pvp-policy.md](pvp-policy.md) | stable | MMO: government-zone PvP (ADR-0008) |
 | [player-identity.md](player-identity.md) | draft | MMO: accounts and identity |
+| [art-guide.md](art-guide.md) | active | asset conventions for artists |

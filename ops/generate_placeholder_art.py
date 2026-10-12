@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Generate placeholder art for EV: The Return.
+
+Designers: these PNGs are stand-ins. Replace any file in
+assets/textures/ with your own; content/ stays untouched as long as
+file names and sizes follow docs/gdd/art-guide.md.
+"""
+
+import os
+import struct
+import zlib
+
+SIZE = 128
+SHIP_COLOR = (235, 235, 235, 255)
+COCKPIT_COLOR = (70, 70, 70, 255)
+ENGINE_COLOR = (255, 170, 60, 255)
+
+
+def write_png(path, width, height, pixels):
+    raw = b"".join(b"\x00" + pixels[y * width * 4 : (y + 1) * width * 4] for y in range(height))
+    def chunk(tag, data):
+        block = tag + data
+        return struct.pack(">I", len(data)) + block + struct.pack(">I", zlib.crc32(block))
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(raw, 9))
+    png += chunk(b"IEND", b"")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.write(png)
+    print(f"wrote {path}")
+
+
+def blend(buffer, x, y, color, alpha):
+    index = (int(y) * SIZE + int(x)) * 4
+    for channel in range(4):
+        old = buffer[index + channel]
+        new = color[channel] if channel < 3 else 255
+        buffer[index + channel] = int(old * (1 - alpha) + new * alpha)
+
+
+def fill_polygon(buffer, points, color):
+    scaled = [(x * SIZE, y * SIZE) for x, y in points]
+    for y in range(SIZE):
+        for x in range(SIZE):
+            coverage = 0.0
+            for dx in (0.25, 0.75):
+                for dy in (0.25, 0.75):
+                    px, py = x + dx, y + dy
+                    inside = False
+                    j = len(scaled) - 1
+                    for i in range(len(scaled)):
+                        xi, yi = scaled[i]
+                        xj, yj = scaled[j]
+                        if (yi > py) != (yj > py) and px < (xj - xi) * (py - yi) / (yj - yi) + xi:
+                            inside = not inside
+                        j = i
+                    coverage += 0.25 if inside else 0.0
+            if coverage > 0.0:
+                blend(buffer, x, y, color, coverage)
+
+
+def fill_circle(buffer, cx, cy, radius, color, falloff=1.0):
+    for y in range(SIZE):
+        for x in range(SIZE):
+            distance = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            if distance <= radius:
+                alpha = (1.0 - (distance / radius) ** falloff) if falloff != 0 else 1.0
+                blend(buffer, x, y, color, min(1.0, max(0.0, alpha)))
+
+
+def ship(buffer):
+    hull = [(0.96, 0.50), (0.52, 0.36), (0.14, 0.40), (0.14, 0.60), (0.52, 0.64)]
+    wing_top = [(0.55, 0.37), (0.22, 0.06), (0.10, 0.10), (0.30, 0.42)]
+    wing_bottom = [(0.55, 0.63), (0.22, 0.94), (0.10, 0.90), (0.30, 0.58)]
+    engine = [(0.06, 0.44), (0.14, 0.44), (0.14, 0.56), (0.06, 0.56)]
+    fill_polygon(buffer, wing_top, SHIP_COLOR)
+    fill_polygon(buffer, wing_bottom, SHIP_COLOR)
+    fill_polygon(buffer, hull, SHIP_COLOR)
+    fill_polygon(buffer, engine, ENGINE_COLOR)
+    fill_circle(buffer, SIZE * 0.62, SIZE * 0.5, SIZE * 0.055, COCKPIT_COLOR, 0)
+
+
+def planet(buffer, base):
+    cx = cy = SIZE / 2
+    radius = SIZE * 0.44
+    for y in range(SIZE):
+        for x in range(SIZE):
+            distance = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            if distance <= radius:
+                shade = 0.45 + 0.55 * (1 - (distance / radius) ** 2) ** 0.5
+                color = tuple(int(channel * shade) for channel in base) + (255,)
+                blend(buffer, x, y, color, 1.0)
+            elif distance <= radius * 1.12:
+                alpha = 1.0 - (distance - radius) / (radius * 0.12)
+                color = (base[0], base[1], base[2], 255)
+                blend(buffer, x, y, color, alpha * 0.35)
+
+
+def main():
+    root = os.path.join(os.path.dirname(__file__), "..", "assets", "textures")
+
+    ship_pixels = [0] * (SIZE * SIZE * 4)
+    ship(ship_pixels)
+    write_png(os.path.join(root, "ships", "shuttle.png"), SIZE, SIZE, bytes(ship_pixels))
+    write_png(os.path.join(root, "ships", "turncoat.png"), SIZE, SIZE, bytes(ship_pixels))
+
+    for name, base in [
+        ("earth.png", (46, 96, 168)),
+        ("newhaven.png", (150, 118, 88)),
+    ]:
+        planet_pixels = [0] * (SIZE * SIZE * 4)
+        planet(planet_pixels, base)
+        write_png(os.path.join(root, "planets", name), SIZE, SIZE, bytes(planet_pixels))
+
+
+if __name__ == "__main__":
+    main()

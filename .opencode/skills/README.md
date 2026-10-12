@@ -1,10 +1,10 @@
 # Project skills
 
-Repeatable agent workflows for this repo. Planned — create each as a
-`SKILL.md` when its workflow stabilizes (M1):
+- [add-ship](add-ship/SKILL.md) — add a ship definition to `content/` and validate
+- [add-system](add-system/SKILL.md) — add a star system + planets + economy hooks
 
-- `add-ship` — add a ship definition to `content/` and validate
-- `add-system` — add a star system + planets + economy hooks
+Planned (create when the workflow stabilizes):
+
 - `content-lint` — full pack validation (schema + cross-references)
 
-Skill files here are project-local and versioned with the repo.
+Skill files are project-local and versioned with the repo.

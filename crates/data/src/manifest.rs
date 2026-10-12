@@ -7,4 +7,5 @@ pub struct Manifest {
     pub version: (u32, u32, u32),
     pub ships: Vec<String>,
     pub systems: Vec<String>,
+    pub outfits: Vec<String>,
 }

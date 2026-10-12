@@ -1,0 +1,21 @@
+(
+    id: "alpha-centauri",
+    name: "Alpha Centauri",
+    government: "independent",
+    description: "A frontier system where the paperwork is thin and the patronage is thinner.",
+    position: (200.0, 0.0),
+    links: ["sol"],
+    planets: [
+        (
+            id: "newhaven",
+            name: "Newhaven",
+            description: "A mining town with a docking ring. The magistrate collects taxes in ore and looks the other way for a little extra.",
+            sprite: Some("textures/planets/newhaven.png"),
+            commodities: [
+                (id: "food", price: 14),
+                (id: "machinery", price: 30),
+                (id: "medicine", price: 70),
+            ],
+        ),
+    ],
+)

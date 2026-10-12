@@ -15,4 +15,8 @@ pub struct ShipDef {
     pub fuel: u32,
     pub cargo: u32,
     pub weapon_slots: u32,
+    #[serde(default)]
+    pub default_outfits: Vec<String>,
+    #[serde(default)]
+    pub sprite: Option<String>,
 }

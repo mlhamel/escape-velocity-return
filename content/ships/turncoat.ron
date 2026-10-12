@@ -1,0 +1,17 @@
+(
+    id: "turncoat",
+    name: "Turncoat",
+    description: "A surplus fighter that traded its registration papers for a fresh coat of black paint.",
+    price: 18000,
+    mass: 10.0,
+    turn_rate: 3.2,
+    acceleration: 130.0,
+    max_speed: 240.0,
+    max_shields: 30.0,
+    max_armor: 20.0,
+    fuel: 80,
+    cargo: 5,
+    weapon_slots: 2,
+    sprite: Some("textures/ships/turncoat.png"),
+    default_outfits: ["light-blaster"],
+)
