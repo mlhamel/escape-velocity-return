@@ -25,9 +25,9 @@ bevy = { workspace = true, default-features = false, features = [
     "wayland",
     "custom_cursor",
     "sysinfo_plugin",
+    "audio",
+    "bevy_gilrs",
 ] }
-bevy_replicon.workspace = true
-bevy_replicon_renet2.workspace = true
 
 [lints]
 workspace = true

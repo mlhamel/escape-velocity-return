@@ -23,6 +23,9 @@ impl ShipState {
     }
 
     pub fn apply_damage(&mut self, amount: f32) -> bool {
+        if amount <= 0.0 {
+            return self.is_destroyed();
+        }
         let absorbed = self.shields.min(amount);
         self.shields -= absorbed;
         let spill = amount - absorbed;
@@ -79,6 +82,16 @@ mod tests {
         ship.apply_damage(1000.0);
         assert_eq!(ship.shields, 0.0);
         assert_eq!(ship.armor, 0.0);
+    }
+
+    #[test]
+    fn zero_and_negative_damage_is_ignored() {
+        let mut ship = ShipState::new(40.0, 25.0);
+        ship.apply_damage(0.0);
+        ship.apply_damage(-10.0);
+        assert_eq!(ship.shields, 40.0);
+        assert_eq!(ship.armor, 25.0);
+        assert!(!ship.is_destroyed());
     }
 
     #[test]

@@ -39,9 +39,6 @@ single-player.
 - `evr-core` stays Bevy-free and I/O-free. Presentation belongs in `evr-client`.
 - Bevy/replicon/renet2 versions are pinned together (read docs/decisions/0005
   before upgrading). rustc >= 1.95 required by bevy 0.19.
-- Client bevy features exclude audio and gamepads: this machine lacks ALSA
-  and libudev dev headers. Re-enable after installing `libasound2-dev` and
-  `libudev-dev`.
 - In-game text follows `docs/gdd/writing-style.md`.
 - History lives in git: ADRs for decisions, `docs/ideas/` for everything considered.
   Never delete an idea; re-status it.
