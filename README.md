@@ -8,10 +8,10 @@ server.
 ## Quickstart
 
 ```bash
-cargo run -p evr-server                       # standalone shard (UDP :3456)
-cargo run -p evr-client                       # offline single-player (embedded server)
-cargo run -p evr-client -- --connect host:port # join a shard
-cargo test --workspace                        # unit + end-to-end tests
+cargo run -p evr-server 3456 --storage shard.db     # standalone shard (UDP :3456, persistent)
+cargo run -p evr-client                            # offline single-player (embedded server)
+cargo run -p evr-client -- --connect host:port --username you --password secret
+cargo test --workspace                              # unit + end-to-end tests
 ```
 
 ## Screenshots
@@ -34,7 +34,7 @@ Captured by the automated tour: `cargo run -p evr-client -- --capture-tour`
 | `docs/ideas/` | idea inbox, never deleted |
 | `prompts/` | curated prompt library |
 | `.opencode/skills/` | agent workflows |
-| `ops/` | deployment (future) |
+| `ops/` | placeholder art generator, deployment (future) |
 
 Agents: start at [AGENTS.md](AGENTS.md). Humans: start at
 [docs/gdd/README.md](docs/gdd/README.md).
@@ -48,5 +48,5 @@ fight, and hyperjump through tool calls. See `crates/mcp`.
 - **M0** — workspace + content pipeline ✅
 - **M1** — offline vertical slice: fly, trade, fight, hyperjump ✅
 - **M2** — real networking: standalone server, 2+ players, per-system rooms, govt-zone PvP ✅
-- **M3** — persistence: accounts, shared economy, multi-system shard
-- **M4** — community playtest: faction meta-game, ops
+- **M3** — persistence: accounts, login gate, SQLite player state ✅
+- **M4** — community playtest: shared economy tick, faction meta-game, ops
