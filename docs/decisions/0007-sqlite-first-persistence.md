@@ -10,7 +10,7 @@ matters for a solo dev, and agent-driven tests need embeddable storage.
 
 ## Decision
 
-SQLite for M3+, accessed through a storage trait defined in `evr-server`.
+SQLite for M3+ (implemented), accessed through a storage trait defined in `evr-server` (`crates/server/src/storage.rs`).
 The trait boundary keeps a Postgres swap possible if a shard's write load
 demands it. Offline mode uses the same storage locally (a save file).
 

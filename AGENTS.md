@@ -11,8 +11,8 @@ single-player.
 - test: `cargo test --workspace` (single crate: `cargo test -p evr-core`)
 - lint: `cargo clippy --workspace -- -D warnings`
 - format: `cargo fmt --all` (check: `cargo fmt --all --check`)
-- run server: `cargo run -p evr-server [port]` (standalone shard; UDP, defaults to 3456)
-- run client online: `cargo run -p evr-client -- --connect host:port`
+- run server: `cargo run -p evr-server [port] [--storage path.db]` (standalone shard; UDP, defaults to 3456; SQLite persistence with --storage)
+- run client online: `cargo run -p evr-client -- --connect host:port [--username name] [--password pw]`
 - run client: `cargo run -p evr-client` (desktop session required)
 - capture screenshots: `cargo run -p evr-client -- --capture-tour` (F12 in-game)
 
@@ -22,7 +22,7 @@ single-player.
 - `crates/data` — RON content loader + validation; its structs are the content schema
 - `crates/protocol` — client intents / server events + replicated components; register(app)
   is called identically by client and server (protocol hash must match)
-- `crates/server` — authoritative simulation app (embeddable lib + standalone bin)
+- `crates/server` — authoritative simulation app; storage trait + SQLite persistence; login gate
 - `crates/client` — Bevy desktop app
 - `crates/mcp` — evr-mcp: the game as an MCP server (agents play the sim
   via observe/set_flight/land/lift_off/trade/jump/advance); registered as

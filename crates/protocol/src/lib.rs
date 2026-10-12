@@ -104,6 +104,21 @@ pub struct RequestHyperjump {
 }
 
 #[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoginResponse {
+    pub success: bool,
+    pub message: String,
+    pub credits: u32,
+    pub cargo: Vec<(String, u32)>,
+    pub system: String,
+}
+
+#[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Notice {
     pub text: String,
 }
@@ -136,6 +151,8 @@ pub fn register(app: &mut App) {
         .add_client_event::<BuyCommodity>(Channel::Ordered)
         .add_client_event::<SellCommodity>(Channel::Ordered)
         .add_client_event::<RequestHyperjump>(Channel::Ordered)
+        .add_client_event::<LoginRequest>(Channel::Ordered)
+        .add_server_event::<LoginResponse>(Channel::Ordered)
         .add_server_event::<Notice>(Channel::Ordered)
         .add_server_event::<PlayerDied>(Channel::Ordered)
         .add_server_event::<Explosion>(Channel::Unordered);
@@ -189,6 +206,17 @@ mod tests {
         });
         roundtrip(RequestHyperjump {
             target: "alpha-centauri".into(),
+        });
+        roundtrip(LoginRequest {
+            username: "alice".into(),
+            password: "pass123".into(),
+        });
+        roundtrip(LoginResponse {
+            success: true,
+            message: "Welcome back.".into(),
+            credits: 500,
+            cargo: vec![("food".into(), 5)],
+            system: "sol".into(),
         });
         roundtrip(Notice {
             text: "No fuel, no glory.".into(),

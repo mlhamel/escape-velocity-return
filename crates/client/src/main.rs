@@ -23,6 +23,28 @@ pub struct MyNetworkId(pub u64);
 
 struct EmbeddedServer(App);
 
+#[derive(Resource)]
+struct LoginCredentials {
+    username: String,
+    password: String,
+}
+
+fn send_login(
+    credentials: Res<LoginCredentials>,
+    client: Res<RenetClient>,
+    mut sent: Local<bool>,
+    mut commands: Commands,
+) {
+    if *sent || !client.is_connected() {
+        return;
+    }
+    *sent = true;
+    commands.client_trigger(evr_protocol::LoginRequest {
+        username: credentials.username.clone(),
+        password: credentials.password.clone(),
+    });
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let capture_tour = args.iter().any(|arg| arg == "--capture-tour");
@@ -114,7 +136,7 @@ fn main() {
         None => {
             app.add_systems(First, step_embedded_server);
             let mut server_app =
-                evr_server::build_server_app("content", evr_server::TickMode::Fixed)
+                evr_server::build_server_app("content", evr_server::TickMode::Fixed, None)
                     .expect("content pack must load");
             let transport = evr_server::attach_memory(&mut server_app);
             server_app.finish();
@@ -127,6 +149,19 @@ fn main() {
         .expect("content pack must load");
     app.insert_resource(input::ClientContent(content_pack));
     app.insert_resource(MyNetworkId(my_id));
+
+    if connect_addr.is_some() {
+        let username = std::env::args()
+            .position(|arg| arg == "--username")
+            .and_then(|index| std::env::args().nth(index + 1))
+            .unwrap_or_else(|| "pilot".to_owned());
+        let password = std::env::args()
+            .position(|arg| arg == "--password")
+            .and_then(|index| std::env::args().nth(index + 1))
+            .unwrap_or_else(|| "pilot".to_owned());
+        app.add_systems(Update, send_login.run_if(resource_exists::<RenetClient>));
+        app.insert_resource(LoginCredentials { username, password });
+    }
 
     app.run();
 }

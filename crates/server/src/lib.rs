@@ -1,6 +1,8 @@
 pub mod gameplay;
+pub mod storage;
 
 pub use gameplay::GameplayPlugin;
+pub use storage::{PlayerState, SqliteStorage, Storage, StorageError};
 
 use std::net::UdpSocket;
 use std::path::Path;
@@ -36,6 +38,7 @@ pub enum TickMode {
 pub fn build_server_app(
     content_root: impl AsRef<Path>,
     tick: TickMode,
+    storage_path: Option<&Path>,
 ) -> Result<App, ContentError> {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -57,6 +60,12 @@ pub fn build_server_app(
     let pack = ContentPack::load_dir(content_root.as_ref())?;
     app.insert_resource(Content(pack));
     app.add_plugins(GameplayPlugin);
+    if let Some(path) = storage_path {
+        let storage = crate::storage::SqliteStorage::open(path).expect("sqlite storage must open");
+        app.insert_resource(crate::gameplay::StorageResource {
+            storage: Some(Box::new(storage)),
+        });
+    }
     Ok(app)
 }
 

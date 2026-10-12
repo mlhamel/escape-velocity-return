@@ -1,6 +1,6 @@
 # Player Identity (MMO)
 
-[draft] — targets M3
+[active] — implemented (M3): username/password login, argon2 hashing, SQLite persistence
 
 - One named identity per shard; the name IS the reputation
 - Accounts: username/password on the shard server (argon2 hashing, no email

@@ -7,9 +7,10 @@ use bevy_replicon::shared::backend::connected_client::NetworkId;
 use evr_core::{Account, FlightModel, ShipState, WeaponState};
 use evr_data::{ContentPack, OutfitKind, WeaponDef};
 use evr_protocol::{
-    AccountState, BuyCommodity, DockedAt, Explosion, Fuel, Heading, Hull, Notice, PlanetTag,
-    PlayerDied, Position, Projectile, RequestHyperjump, RequestLand, RequestLiftOff, SellCommodity,
-    SetFiring, SetThrottle, SetTurn, ShipInfo, ShipKind, SystemMembership,
+    AccountState, BuyCommodity, DockedAt, Explosion, Fuel, Heading, Hull, LoginRequest,
+    LoginResponse, Notice, PlanetTag, PlayerDied, Position, Projectile, RequestHyperjump,
+    RequestLand, RequestLiftOff, SellCommodity, SetFiring, SetThrottle, SetTurn, ShipInfo,
+    ShipKind, SystemMembership,
 };
 
 use crate::Content;
@@ -73,6 +74,9 @@ struct ClientRef(Entity);
 struct Wallet(pub Account);
 
 #[derive(Component)]
+pub struct PlayerName(pub String);
+
+#[derive(Component)]
 struct ProjectileMotion {
     speed: f32,
 }
@@ -101,19 +105,36 @@ impl VisibilityFilter for InSystem {
 struct PlayerRecord {
     account: Option<Account>,
     owner: Option<u64>,
+    name: Option<String>,
 }
 
 #[derive(Resource, Default)]
 struct PlayerRespawn(Option<f32>);
 
+#[derive(Resource)]
+struct SaveTimer(f32);
+
+impl Default for SaveTimer {
+    fn default() -> Self {
+        Self(0.0)
+    }
+}
+
 #[derive(Resource, Default)]
 struct PirateRespawn(Option<f32>);
+
+#[derive(Resource, Default)]
+pub struct StorageResource {
+    pub storage: Option<Box<dyn crate::storage::Storage>>,
+}
 
 pub struct GameplayPlugin;
 
 impl Plugin for GameplayPlugin {
     fn build(&self, app: &mut App) {
         app.add_visibility_filter::<InSystem>()
+            .init_resource::<StorageResource>()
+            .init_resource::<SaveTimer>()
             .init_resource::<PlayerRecord>()
             .init_resource::<PlayerRespawn>()
             .init_resource::<PirateRespawn>()
@@ -125,12 +146,12 @@ impl Plugin for GameplayPlugin {
             .add_observer(on_buy_commodity)
             .add_observer(on_sell_commodity)
             .add_observer(on_request_hyperjump)
+            .add_observer(on_login_request)
             .add_systems(OnEnter(ServerState::Running), spawn_world)
             .add_systems(
                 Update,
                 (
                     authorize_clients,
-                    spawn_player_on_connect,
                     apply_ship_control,
                     pirate_ai,
                     fire_weapons,
@@ -142,6 +163,7 @@ impl Plugin for GameplayPlugin {
                     respawn_pirates,
                     sync_ship_state,
                     sync_accounts,
+                    auto_save,
                 )
                     .chain(),
             );
@@ -268,53 +290,155 @@ fn notice(commands: &mut Commands, client: ClientId, text: impl Into<String>) {
     });
 }
 
-fn spawn_player_on_connect(
+fn on_login_request(
+    trigger: On<FromClient<LoginRequest>>,
     mut commands: Commands,
     content: Res<Content>,
-    mut record: ResMut<PlayerRecord>,
-    connected: Query<(Entity, &NetworkId), Added<ConnectedClient>>,
+    clients: Query<&NetworkId>,
+    storage: Res<StorageResource>,
+    logged_in: Query<&NetworkId, With<PlayerShip>>,
+    active_names: Query<&PlayerName>,
 ) {
-    for (client_entity, network_id) in &connected {
-        let owner = network_id.get();
-        let account = record
-            .account
-            .take()
-            .unwrap_or_else(|| Account::new(STARTING_CREDITS));
-        let capacity = content
+    let username = trigger.event().username.clone();
+    let password = trigger.event().password.clone();
+
+    let owner = raw_id(trigger.client_id, &clients);
+    if logged_in.iter().any(|id| id.get() == owner) {
+        return;
+    }
+    if active_names.iter().any(|n| n.0 == username) {
+        commands.server_trigger(ToClients {
+            targets: SendTargets::Single(trigger.client_id),
+            message: LoginResponse {
+                success: false,
+                message: "Already logged in.".to_owned(),
+                credits: 0,
+                cargo: Vec::new(),
+                system: String::new(),
+            },
+        });
+        return;
+    }
+    let Some(storage) = storage.storage.as_ref() else {
+        return;
+    };
+    let result = match storage.verify_login(&username, &password) {
+        Ok(Some(state)) => (true, "Welcome back.".to_owned(), Some(state)),
+        Ok(None) => match storage.create_account(&username, &password) {
+            Ok(state) => (true, "Account created.".to_owned(), Some(state)),
+            Err(_) => (false, "Username taken.".to_owned(), None),
+        },
+        Err(crate::storage::StorageError::NotFound) => {
+            (false, "Invalid credentials.".to_owned(), None)
+        }
+        Err(_) => (false, "Storage error.".to_owned(), None),
+    };
+
+    let (success, message, state) = result;
+    let client = trigger.client_id;
+    commands.server_trigger(ToClients {
+        targets: SendTargets::Single(client),
+        message: LoginResponse {
+            success,
+            message,
+            credits: state.as_ref().map_or(0, |s| s.credits),
+            cargo: state.as_ref().map_or_default(|s| s.cargo.clone()),
+            system: state
+                .as_ref()
+                .map_or_else(|| PLAYER_SYSTEM.to_owned(), |s| s.system.clone()),
+        },
+    });
+
+    let Some(state) = state else {
+        return;
+    };
+    let ship_def = content.0.ship(&state.ship_id).cloned().unwrap_or_else(|| {
+        content
             .0
             .ship(PLAYER_SHIP)
-            .expect("player ship must exist in pack")
-            .cargo;
-        let ship = spawn_ship(
-            &mut commands,
-            &content.0,
-            PLAYER_SHIP,
-            ShipKind::Player,
-            Some(owner),
-            PLAYER_SYSTEM,
-            Vec2::ZERO,
-        );
-        commands.entity(ship).insert((
-            Wallet(account.clone()),
-            AccountState {
-                credits: account.credits,
-                cargo: account.cargo.clone(),
-                cargo_capacity: capacity,
-            },
-            ClientRef(client_entity),
-        ));
-    }
+            .expect("player ship must exist")
+            .clone()
+    });
+    let capacity = ship_def.cargo;
+    let spawn_system = state.system.clone();
+    let spawn_position = Vec2::new(state.position.0, state.position.1);
+
+    let ship_entity = spawn_ship(
+        &mut commands,
+        &content.0,
+        &ship_def.id,
+        ShipKind::Player,
+        Some(owner),
+        &spawn_system,
+        spawn_position,
+    );
+    let client_entity = trigger
+        .client_id
+        .entity()
+        .expect("login must come from a connected client");
+    commands.entity(ship_entity).insert((
+        Wallet(Account {
+            credits: state.credits,
+            cargo: state.cargo.clone(),
+        }),
+        AccountState {
+            credits: state.credits,
+            cargo: state.cargo.clone(),
+            cargo_capacity: capacity,
+        },
+        ClientRef(client_entity),
+        PlayerName(username.clone()),
+    ));
 }
 
 fn authorize_clients(
     mut commands: Commands,
-    newly_authorized: Query<Entity, Added<AuthorizedClient>>,
+    content: Res<Content>,
+    newly_authorized: Query<(Entity, &NetworkId), Added<AuthorizedClient>>,
+    storage: Res<StorageResource>,
 ) {
-    for client_entity in &newly_authorized {
+    for (client_entity, network_id) in &newly_authorized {
         commands
             .entity(client_entity)
             .insert(ClientSystem(PLAYER_SYSTEM.to_owned()));
+
+        if storage.storage.is_none() {
+            spawn_default_player(&mut commands, &content, network_id.get(), client_entity);
+        }
     }
+}
+
+fn spawn_default_player(
+    commands: &mut Commands,
+    content: &Res<Content>,
+    owner: u64,
+    client_entity: Entity,
+) {
+    let capacity = content
+        .0
+        .ship(PLAYER_SHIP)
+        .expect("player ship must exist in pack")
+        .cargo;
+    let account = Account::new(STARTING_CREDITS);
+    let ship = spawn_ship(
+        commands,
+        &content.0,
+        PLAYER_SHIP,
+        ShipKind::Player,
+        Some(owner),
+        PLAYER_SYSTEM,
+        Vec2::ZERO,
+    );
+    commands.entity(ship).insert((
+        Wallet(account.clone()),
+        AccountState {
+            credits: account.credits,
+            cargo: account.cargo.clone(),
+            cargo_capacity: capacity,
+        },
+        ClientRef(client_entity),
+        PlayerName("pilot".to_owned()),
+    ));
 }
 
 fn sanitize_input(value: f32, min: f32, max: f32) -> Option<f32> {
@@ -615,12 +739,15 @@ type DyingShips<'w, 's> = Query<
     ),
 >;
 
+#[allow(clippy::too_many_arguments)]
 fn ship_deaths(
     mut commands: Commands,
     mut record: ResMut<PlayerRecord>,
     mut player_respawn: ResMut<PlayerRespawn>,
     mut pirate_respawn: ResMut<PirateRespawn>,
     ships: DyingShips,
+    names: Query<&PlayerName>,
+    storage: Res<StorageResource>,
     clients: Query<(Entity, &ClientSystem), With<ConnectedClient>>,
 ) {
     for (entity, ship, info, membership, owner, client_ref, wallet) in &ships {
@@ -643,6 +770,24 @@ fn ship_deaths(
             ShipKind::Player => {
                 if let Some(wallet) = wallet {
                     record.account = Some(Account::new(wallet.0.credits));
+                }
+                if let Ok(name) = names.get(entity) {
+                    record.name = Some(name.0.clone());
+                    if let Some(storage) = storage.storage.as_ref() {
+                        let _ = storage.save_player(
+                            &name.0,
+                            &crate::storage::PlayerState {
+                                credits: wallet.map_or(0, |w| w.0.credits),
+                                cargo: Vec::new(),
+                                ship_id: PLAYER_SHIP.to_owned(),
+                                system: PLAYER_SYSTEM.to_owned(),
+                                position: (0.0, 0.0),
+                                fuel: 0.0,
+                                shields: 0.0,
+                                armor: 0.0,
+                            },
+                        );
+                    }
                 }
                 record.owner = Some(owner.0);
                 player_respawn.0 = Some(PLAYER_RESPAWN_SECS);
@@ -714,6 +859,7 @@ fn respawn_players(
         .insert(ClientSystem(PLAYER_SYSTEM.to_owned()));
     commands.entity(ship).insert((
         Wallet(account.clone()),
+        PlayerName(record.name.clone().unwrap_or_default()),
         AccountState {
             credits: account.credits,
             cargo: account.cargo.clone(),
@@ -765,6 +911,40 @@ fn sync_accounts(mut players: Query<(&Wallet, &mut AccountState)>) {
             state.cargo = wallet.0.cargo.clone();
         }
     }
+}
+
+fn auto_save(
+    time: Res<Time>,
+    mut timer: ResMut<SaveTimer>,
+    storage: Res<StorageResource>,
+    content: Res<Content>,
+    players: Query<(&PlayerName, &Wallet, &Ship, &SystemMembership, &Fuel), With<PlayerShip>>,
+) {
+    const SAVE_INTERVAL: f32 = 10.0;
+    timer.0 += time.delta_secs();
+    if timer.0 < SAVE_INTERVAL {
+        return;
+    }
+    timer.0 = 0.0;
+
+    let Some(storage) = storage.storage.as_ref() else {
+        return;
+    };
+
+    for (name, wallet, ship, membership, fuel) in &players {
+        let state = crate::storage::PlayerState {
+            credits: wallet.0.credits,
+            cargo: wallet.0.cargo.clone(),
+            ship_id: PLAYER_SHIP.to_owned(),
+            system: membership.0.clone(),
+            position: (ship.0.position.x, ship.0.position.y),
+            fuel: fuel.current,
+            shields: ship.0.shields,
+            armor: ship.0.armor,
+        };
+        let _ = storage.save_player(&name.0, &state);
+    }
+    let _ = &content;
 }
 
 type LandingShips<'w, 's> = Query<
@@ -1084,6 +1264,7 @@ mod tests {
     use evr_protocol::AccountState;
 
     use super::*;
+    use crate::storage::Storage;
     use crate::{
         EMBEDDED_CLIENT_ID, PROTOCOL_ID, TickMode, attach_memory, attach_udp, build_server_app,
     };
@@ -1097,8 +1278,8 @@ mod tests {
     impl Harness {
         fn new() -> Self {
             let content_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
-            let mut server =
-                build_server_app(content_root, TickMode::PerUpdate).expect("server app builds");
+            let mut server = build_server_app(content_root, TickMode::PerUpdate, None)
+                .expect("server app builds");
             let transport = attach_memory(&mut server);
             server.finish();
 
@@ -1440,8 +1621,8 @@ mod tests {
     #[test]
     fn udp_two_players_rooms_and_govt_zones() {
         let content_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let mut server =
-            build_server_app(content_root, TickMode::PerUpdate).expect("server app must build");
+        let mut server = build_server_app(content_root, TickMode::PerUpdate, None)
+            .expect("server app must build");
         let bound = attach_udp(
             &mut server,
             std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -1572,5 +1753,169 @@ mod tests {
                 .any(|info| info.kind == ShipKind::Pirate),
             "alice must see the alpha centauri pirate now"
         );
+    }
+    #[test]
+    fn login_and_persistence() {
+        let storage_path =
+            std::env::temp_dir().join(format!("evr-persist-test-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&storage_path);
+        let content_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
+
+        let mut server = build_server_app(content_root.clone(), TickMode::PerUpdate, None)
+            .expect("server with storage must build");
+        let storage =
+            crate::storage::SqliteStorage::open(&storage_path).expect("storage must open");
+        server.insert_resource(StorageResource {
+            storage: Some(Box::new(storage)),
+        });
+        let transport = attach_memory(&mut server);
+        server.finish();
+
+        let mut client = App::new();
+        client.add_plugins(MinimalPlugins);
+        client.add_plugins(StatesPlugin);
+        client.add_plugins(RepliconPlugins.set(ServerPlugin::new(PostUpdate)));
+        client.add_plugins(RepliconRenetPlugins);
+        evr_protocol::register(&mut client);
+        let (server_channels, client_channels) = {
+            let channels = client.world().resource::<RepliconChannels>();
+            (channels.server_configs(), channels.client_configs())
+        };
+        client.insert_resource(RenetClient::new(
+            ConnectionConfig::from_channels(server_channels, client_channels),
+            false,
+        ));
+        client.insert_resource(transport);
+        client.finish();
+
+        let step = |server: &mut App, client: &mut App| {
+            client.update();
+            server.update();
+            std::thread::sleep(Duration::from_millis(15));
+        };
+
+        let mut connect_steps = 0;
+        while !client.world().resource::<RenetClient>().is_connected() {
+            step(&mut server, &mut client);
+            connect_steps += 1;
+            assert!(connect_steps < 400, "client must connect");
+        }
+
+        for _ in 0..10 {
+            step(&mut server, &mut client);
+        }
+
+        client
+            .world_mut()
+            .client_trigger(evr_protocol::LoginRequest {
+                username: "alice".to_owned(),
+                password: "pass123".to_owned(),
+            });
+
+        let mut login_steps = 0;
+        loop {
+            step(&mut server, &mut client);
+            login_steps += 1;
+            assert!(login_steps < 400, "login must complete");
+
+            let mut ships = server
+                .world_mut()
+                .query_filtered::<&Owner, With<PlayerShip>>();
+            let world = server.world();
+            if ships
+                .iter(world)
+                .any(|owner| owner.0 == EMBEDDED_CLIENT_ID as u64)
+            {
+                break;
+            }
+        }
+
+        let mut accounts = server
+            .world_mut()
+            .query_filtered::<&Wallet, With<PlayerShip>>();
+        let world = server.world();
+        let account = accounts
+            .iter(world)
+            .next()
+            .expect("player wallet must exist after login");
+        assert_eq!(account.0.credits, STARTING_CREDITS);
+
+        let mut ships = server.world_mut().query::<(&Owner, &mut Ship)>();
+        let world = server.world_mut();
+        for (owner, mut ship) in ships.iter_mut(world) {
+            if owner.0 == EMBEDDED_CLIENT_ID as u64 {
+                ship.0.position = Vec2::new(480.0, 0.0);
+                ship.0.velocity = Vec2::ZERO;
+            }
+        }
+        for _ in 0..5 {
+            step(&mut server, &mut client);
+        }
+
+        client
+            .world_mut()
+            .client_trigger(evr_protocol::RequestLand {
+                planet: "earth".to_owned(),
+            });
+        let mut dock_steps = 0;
+        loop {
+            step(&mut server, &mut client);
+            dock_steps += 1;
+            assert!(dock_steps < 200, "must dock");
+
+            let mut docked = client
+                .world_mut()
+                .query_filtered::<&DockedAt, With<Remote>>();
+            let world = client.world();
+            if docked.iter(world).count() > 0 {
+                break;
+            }
+        }
+
+        client
+            .world_mut()
+            .client_trigger(evr_protocol::BuyCommodity {
+                commodity: "food".to_owned(),
+                qty: 2,
+            });
+        for _ in 0..10 {
+            step(&mut server, &mut client);
+        }
+        let mut accounts = client
+            .world_mut()
+            .query_filtered::<&AccountState, With<Remote>>();
+        let world = client.world();
+        let account = accounts
+            .iter(world)
+            .find(|_| true)
+            .expect("account must exist");
+        assert_eq!(account.credits, STARTING_CREDITS - 16);
+
+        let save_timer = server.world_mut();
+        save_timer.resource_mut::<SaveTimer>().0 = 999.0;
+        step(&mut server, &mut client);
+
+        let mut server2 = build_server_app(
+            content_root,
+            TickMode::PerUpdate,
+            Some(storage_path.as_path()),
+        )
+        .expect("server2 must build");
+        let transport2 = attach_memory(&mut server2);
+        server2.finish();
+        let _ = transport2;
+
+        let storage_check =
+            crate::storage::SqliteStorage::open(&storage_path).expect("storage must reopen");
+        let loaded = storage_check
+            .verify_login("alice", "pass123")
+            .expect("verify")
+            .expect("alice must exist after save");
+        assert_eq!(loaded.credits, STARTING_CREDITS - 16);
+        assert_eq!(loaded.cargo.len(), 1);
+        assert_eq!(loaded.cargo[0].0, "food");
+        assert_eq!(loaded.cargo[0].1, 2);
+
+        let _ = std::fs::remove_file(&storage_path);
     }
 }

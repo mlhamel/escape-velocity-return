@@ -25,8 +25,8 @@ pub struct Harness {
 
 impl Harness {
     pub fn new(content_root: &Path) -> Self {
-        let mut server =
-            build_server_app(content_root, TickMode::PerUpdate).expect("server app must build");
+        let mut server = build_server_app(content_root, TickMode::PerUpdate, None)
+            .expect("server app must build");
         let transport = attach_memory(&mut server);
         server.finish();
 
