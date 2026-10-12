@@ -13,11 +13,20 @@ cargo run -p evr-client   # desktop client (needs a display)
 cargo test --workspace    # unit + content pipeline tests
 ```
 
+## Screenshots
+
+![Flight near Earth](docs/screenshots/01-flight-earth.png)
+![Duel with a Turncoat in Alpha Centauri](docs/screenshots/02-combat.png)
+![Docked and trading at Newhaven](docs/screenshots/03-docked-trade.png)
+
+Captured by the automated tour: `cargo run -p evr-client -- --capture-tour`
+(F12 saves a screenshot anytime during play).
+
 ## Structure
 
 | Path | What |
 |---|---|
-| `crates/` | evr-core (sim), evr-data (content), evr-protocol (wire), evr-server, evr-client |
+| `crates/` | evr-core (sim), evr-data (content), evr-protocol (wire), evr-server, evr-client, evr-mcp (MCP server) |
 | `content/` | RON content packs — data, not code |
 | `docs/gdd/` | game design (README is the index) |
 | `docs/decisions/` | ADRs — the why behind everything |
@@ -28,6 +37,10 @@ cargo test --workspace    # unit + content pipeline tests
 
 Agents: start at [AGENTS.md](AGENTS.md). Humans: start at
 [docs/gdd/README.md](docs/gdd/README.md).
+
+The game is also playable by agents: `evr-mcp` exposes the sim as an MCP
+server (registered as `evr-game` in opencode.json) — observe, fly, trade,
+fight, and hyperjump through tool calls. See `crates/mcp`.
 
 ## Milestones
 

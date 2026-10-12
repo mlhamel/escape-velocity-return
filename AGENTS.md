@@ -13,6 +13,7 @@ single-player.
 - format: `cargo fmt --all` (check: `cargo fmt --all --check`)
 - run server: `cargo run -p evr-server` (headless, runs from workspace root)
 - run client: `cargo run -p evr-client` (desktop session required)
+- capture screenshots: `cargo run -p evr-client -- --capture-tour` (F12 in-game)
 
 ## Structure
 
@@ -22,6 +23,9 @@ single-player.
   is called identically by client and server (protocol hash must match)
 - `crates/server` — authoritative simulation app (embeddable lib + standalone bin)
 - `crates/client` — Bevy desktop app
+- `crates/mcp` — evr-mcp: the game as an MCP server (agents play the sim
+  via observe/set_flight/land/lift_off/trade/jump/advance); registered as
+  evr-game in opencode.json
 - `content/` — RON content packs; data, never code
 - `assets/` — textures referenced by content sprite fields; placeholders generated via ops/generate_placeholder_art.py (see docs/gdd/art-guide.md)
 - `docs/gdd/` — canonical game design; README is the index
