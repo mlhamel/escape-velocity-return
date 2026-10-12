@@ -1,13 +1,10 @@
+use crate::MyNetworkId;
+use crate::input::ClientContent;
+use crate::textures::Textures;
 use bevy::color::Mix;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
-use evr_protocol::{
-    Explosion, Heading, Hull, PlanetTag, Position, Projectile, ShipInfo, ShipKind, SystemMembership,
-};
-use evr_server::EMBEDDED_CLIENT_ID;
-
-use crate::input::ClientContent;
-use crate::textures::Textures;
+use evr_protocol::{Explosion, Heading, Hull, PlanetTag, Position, Projectile, ShipInfo, ShipKind};
 
 const FLASH_SECS: f32 = 0.18;
 
@@ -27,7 +24,6 @@ impl Plugin for VisualsPlugin {
                 sync_ship_transforms,
                 sync_planet_transforms,
                 sync_projectile_transforms,
-                apply_system_filter,
                 parallax,
                 camera_follow,
             )
@@ -61,14 +57,11 @@ struct Debris {
 #[derive(Component)]
 struct StarLayer(f32);
 
-fn my_network_id() -> u64 {
-    EMBEDDED_CLIENT_ID as u64
-}
-
 fn kind_color(kind: ShipKind) -> Color {
     match kind {
         ShipKind::Player => Color::srgb(0.55, 1.0, 0.85),
         ShipKind::Pirate => Color::srgb(1.0, 0.4, 0.3),
+        ShipKind::Police => Color::srgb(0.45, 0.65, 1.0),
     }
 }
 
@@ -178,21 +171,7 @@ fn tick_flashes(
     }
 }
 
-fn on_explosion(
-    trigger: On<Explosion>,
-    mut commands: Commands,
-    textures: Res<Textures>,
-    my_ships: Query<(&ShipInfo, &SystemMembership)>,
-) {
-    let Some((_, my_membership)) = my_ships
-        .iter()
-        .find(|(info, _)| info.owner == Some(my_network_id()))
-    else {
-        return;
-    };
-    if trigger.event().system != my_membership.0 {
-        return;
-    }
+fn on_explosion(trigger: On<Explosion>, mut commands: Commands, textures: Res<Textures>) {
     let origin = Vec2::from(trigger.event().position);
     for index in 0..12u32 {
         let angle = index as f32 * std::f32::consts::FRAC_PI_6 + (index % 3) as f32 * 0.17;
@@ -250,33 +229,6 @@ fn sync_projectile_transforms(
     }
 }
 
-fn apply_system_filter(
-    my_ships: Query<(&ShipInfo, &SystemMembership)>,
-    mut movers: Query<(&mut Visibility, &SystemMembership), Without<PlanetVisual>>,
-    mut planets: Query<(&mut Visibility, &PlanetTag), With<PlanetVisual>>,
-) {
-    let Some((_, my_membership)) = my_ships
-        .iter()
-        .find(|(info, _)| info.owner == Some(my_network_id()))
-    else {
-        return;
-    };
-    for (mut visibility, membership) in &mut movers {
-        *visibility = if membership.0 == my_membership.0 {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-    }
-    for (mut visibility, planet) in &mut planets {
-        *visibility = if planet.system == my_membership.0 {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-    }
-}
-
 fn parallax(
     camera: Query<&Transform, (With<Camera2d>, Without<StarLayer>)>,
     mut layers: Query<(&StarLayer, &mut Transform)>,
@@ -291,12 +243,13 @@ fn parallax(
 }
 
 fn camera_follow(
+    my_id: Res<MyNetworkId>,
     my_ships: Query<(&ShipInfo, &Position)>,
     mut camera: Query<&mut Transform, (With<Camera2d>, Without<Position>)>,
 ) {
     let Some((_, position)) = my_ships
         .iter()
-        .find(|(info, _)| info.owner == Some(my_network_id()))
+        .find(|(info, _)| info.owner == Some(my_id.0))
     else {
         return;
     };

@@ -25,5 +25,6 @@ it trails bevy_replicon releases.
 ## Consequences
 
 Replication is declarative (events + components); renet2 provides the
-netcode (authentication, encryption, reliability). Server bevy
-feature-slimming is deferred to M2, when the transport gets wired for real.
+netcode (authentication, encryption, reliability). The server bin attaches UDP (native_transport) at M2. The server has run
+slim (std, multi_threaded, bevy_state, serialize — no render features) since
+the M0 ALSA fix.

@@ -5,9 +5,9 @@ use evr_protocol::{
     AccountState, DockedAt, Fuel, Hull, Notice, PlanetTag, PlayerDied, Position, ShipInfo,
     SystemMembership,
 };
-use evr_server::EMBEDDED_CLIENT_ID;
 use evr_server::gameplay::{JUMP_FUEL_COST, LAND_RANGE};
 
+use crate::MyNetworkId;
 use crate::input::ClientContent;
 
 const CYAN: Color = Color::srgb(0.55, 1.0, 0.85);
@@ -227,7 +227,9 @@ fn set_bar(nodes: &mut Query<&mut Node>, entity: Entity, fraction: f32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_hud(
+    my_id: Res<MyNetworkId>,
     mut texts: Query<&mut Text>,
     mut nodes: Query<&mut Node>,
     layout: Res<HudLayout>,
@@ -238,7 +240,7 @@ fn update_hud(
 ) {
     let my = ships
         .iter()
-        .find(|(info, _, _, _, _, _, _)| info.owner == Some(EMBEDDED_CLIENT_ID as u64));
+        .find(|(info, _, _, _, _, _, _)| info.owner == Some(my_id.0));
 
     let Some((_, hull, fuel, account, membership, position, docked)) = my else {
         set_text(&mut texts, layout.system_line, String::new());

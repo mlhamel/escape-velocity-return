@@ -1,6 +1,7 @@
 # PvP Policy (MMO)
 
-[stable] — decided in ADR-0008
+[stable] — implemented (M2): fines + Confederation patrol on player-vs-player
+hits in policed space
 
 Government zones are the ruleset:
 

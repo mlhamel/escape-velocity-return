@@ -1,0 +1,17 @@
+(
+    id: "patrol",
+    name: "Patrol Cutter",
+    description: "A Confederation cutter with fresh paint, current papers, and no sense of humor.",
+    price: 24000,
+    mass: 11.0,
+    turn_rate: 3.0,
+    acceleration: 120.0,
+    max_speed: 230.0,
+    max_shields: 45.0,
+    max_armor: 30.0,
+    fuel: 90,
+    cargo: 4,
+    weapon_slots: 2,
+    sprite: Some("textures/ships/shuttle.png"),
+    default_outfits: ["light-blaster"],
+)

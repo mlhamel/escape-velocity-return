@@ -5,6 +5,7 @@
     ships: [
         "ships/shuttle.ron",
         "ships/turncoat.ron",
+        "ships/patrol.ron",
     ],
     systems: [
         "systems/sol.ron",

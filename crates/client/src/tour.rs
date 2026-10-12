@@ -7,8 +7,8 @@ use evr_protocol::{
     BuyCommodity, DockedAt, Heading, PlanetTag, Position, RequestHyperjump, RequestLand, SetFiring,
     SetThrottle, SetTurn, ShipInfo, ShipKind, SystemMembership,
 };
-use evr_server::EMBEDDED_CLIENT_ID;
 
+use crate::MyNetworkId;
 use crate::screenshots::request_capture;
 
 const CAPTURE_DIR: &str = "docs/screenshots";
@@ -51,10 +51,6 @@ enum TourStage {
     Done,
 }
 
-fn my_network_id() -> u64 {
-    EMBEDDED_CLIENT_ID as u64
-}
-
 fn steer(current: Vec2, heading: f32, target: Vec2) -> (f32, f32) {
     let delta = target - current;
     let desired = delta.y.atan2(delta.x);
@@ -77,6 +73,7 @@ type TourShips<'w, 's> = Query<
 >;
 
 fn run_tour(
+    my_id: Res<MyNetworkId>,
     mut commands: Commands,
     mut tour: ResMut<Tour>,
     mut exit: MessageWriter<AppExit>,
@@ -85,7 +82,7 @@ fn run_tour(
 ) {
     let Some((_, position, heading, membership, docked)) = ships
         .iter()
-        .find(|(info, _, _, _, _)| info.owner == Some(my_network_id()))
+        .find(|(info, _, _, _, _)| info.owner == Some(my_id.0))
     else {
         return;
     };

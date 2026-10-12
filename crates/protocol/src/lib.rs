@@ -35,6 +35,7 @@ pub struct ShipInfo {
 pub enum ShipKind {
     Player,
     Pirate,
+    Police,
 }
 
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]

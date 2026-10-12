@@ -14,7 +14,8 @@ Real-time top-down 2D, in the spirit of EV.
 
 Live weapon: Light Blaster (`content/outfits/light-blaster.ron`) — damage 6,
 cooldown 0.25 s, projectile speed 420, ttl 1.2 s. Pirates fly Turncoats and
-hunt players in their system.
+hunt players in their system; attacking a player in Confederation space earns
+a fine and a Patrol Cutter on your tail (see pvp-policy.md).
 
 Open questions:
 

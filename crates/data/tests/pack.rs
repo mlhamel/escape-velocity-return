@@ -11,7 +11,7 @@ fn base_pack_loads() {
     let pack = ContentPack::load_dir(&root).expect("base pack must load");
 
     assert_eq!(pack.manifest.id, "evr-base");
-    assert_eq!(pack.ships.len(), 2);
+    assert_eq!(pack.ships.len(), 3);
     assert_eq!(pack.systems.len(), 2);
     assert_eq!(pack.outfits.len(), 1);
 

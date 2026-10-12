@@ -2,6 +2,7 @@ pub mod gameplay;
 
 pub use gameplay::GameplayPlugin;
 
+use std::net::UdpSocket;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -11,8 +12,8 @@ use bevy::state::app::StatesPlugin;
 use bevy::time::Fixed;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet2::netcode::{
-    ClientAuthentication, NetcodeClientTransport, NetcodeServerTransport, ServerAuthentication,
-    ServerSetupConfig, in_memory_server_addr, new_memory_sockets,
+    ClientAuthentication, NativeSocket, NetcodeClientTransport, NetcodeServerTransport,
+    ServerAuthentication, ServerSetupConfig, in_memory_server_addr, new_memory_sockets,
 };
 use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetServer};
 use bevy_replicon_renet2::{RenetChannelsExt, RepliconRenetPlugins};
@@ -21,6 +22,7 @@ use evr_data::{ContentError, ContentPack};
 pub const TICK_RATE: f32 = 60.0;
 pub const PROTOCOL_ID: u64 = 1;
 pub const EMBEDDED_CLIENT_ID: u16 = 1;
+pub const MAX_CLIENTS: usize = 64;
 
 #[derive(Resource)]
 pub struct Content(pub ContentPack);
@@ -55,7 +57,6 @@ pub fn build_server_app(
     let pack = ContentPack::load_dir(content_root.as_ref())?;
     app.insert_resource(Content(pack));
     app.add_plugins(GameplayPlugin);
-    app.finish();
     Ok(app)
 }
 
@@ -103,4 +104,40 @@ pub fn attach_memory(app: &mut App) -> NetcodeClientTransport {
         socket,
     )
     .expect("memory client transport must be valid")
+}
+
+pub fn attach_udp(
+    app: &mut App,
+    bind_addr: std::net::SocketAddr,
+    max_clients: usize,
+) -> std::io::Result<std::net::SocketAddr> {
+    let current_time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("system time must be after the epoch");
+
+    let socket = UdpSocket::bind(bind_addr)?;
+    let bound = socket.local_addr()?;
+
+    let (server_channels, client_channels) = {
+        let channels = app.world().resource::<RepliconChannels>();
+        (channels.server_configs(), channels.client_configs())
+    };
+    let server = RenetServer::new(ConnectionConfig::from_channels(
+        server_channels,
+        client_channels,
+    ));
+    let transport = NetcodeServerTransport::new(
+        ServerSetupConfig {
+            current_time,
+            max_clients,
+            protocol_id: PROTOCOL_ID,
+            socket_addresses: vec![vec![bound]],
+            authentication: ServerAuthentication::Unsecure,
+        },
+        NativeSocket::new(socket).map_err(std::io::Error::other)?,
+    )?;
+
+    app.insert_resource(server);
+    app.insert_resource(transport);
+    Ok(bound)
 }

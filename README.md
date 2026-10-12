@@ -8,9 +8,10 @@ server.
 ## Quickstart
 
 ```bash
-cargo run -p evr-server   # headless shard server (loads content/)
-cargo run -p evr-client   # desktop client (needs a display)
-cargo test --workspace    # unit + content pipeline tests
+cargo run -p evr-server                       # standalone shard (UDP :3456)
+cargo run -p evr-client                       # offline single-player (embedded server)
+cargo run -p evr-client -- --connect host:port # join a shard
+cargo test --workspace                        # unit + end-to-end tests
 ```
 
 ## Screenshots
@@ -46,6 +47,6 @@ fight, and hyperjump through tool calls. See `crates/mcp`.
 
 - **M0** — workspace + content pipeline ✅
 - **M1** — offline vertical slice: fly, trade, fight, hyperjump ✅
-- **M2** — real networking: standalone server, 2+ players, govt-zone PvP
+- **M2** — real networking: standalone server, 2+ players, per-system rooms, govt-zone PvP ✅
 - **M3** — persistence: accounts, shared economy, multi-system shard
 - **M4** — community playtest: faction meta-game, ops

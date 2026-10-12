@@ -5,17 +5,36 @@ mod textures;
 mod tour;
 mod visuals;
 
+use std::net::SocketAddr;
+use std::time::SystemTime;
+
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::window::WindowPlugin;
 use bevy_replicon::prelude::*;
+use bevy_replicon_renet2::netcode::{ClientAuthentication, NativeSocket, NetcodeClientTransport};
 use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetClient};
 use bevy_replicon_renet2::{RenetChannelsExt, RepliconRenetPlugins};
+
+#[derive(Resource)]
+pub struct MyNetworkId(pub u64);
 
 struct EmbeddedServer(App);
 
 fn main() {
-    let capture_tour = std::env::args().any(|arg| arg == "--capture-tour");
+    let args: Vec<String> = std::env::args().collect();
+    let capture_tour = args.iter().any(|arg| arg == "--capture-tour");
+    let connect_addr = args.iter().position(|arg| arg == "--connect").map(|index| {
+        let addr = args
+            .get(index + 1)
+            .unwrap_or_else(|| panic!("--connect takes host:port"));
+        addr.parse::<SocketAddr>()
+            .unwrap_or_else(|_| panic!("--connect takes host:port, got {addr:?}"))
+    });
+    assert!(
+        !(capture_tour && connect_addr.is_some()),
+        "--capture-tour requires embedded mode"
+    );
 
     let mut app = App::new();
     app.add_plugins(
@@ -48,11 +67,6 @@ fn main() {
     if capture_tour {
         app.add_plugins(tour::CaptureTourPlugin);
     }
-    app.add_systems(First, step_embedded_server);
-
-    let mut server_app = evr_server::build_server_app("content", evr_server::TickMode::Fixed)
-        .expect("content pack must load");
-    let transport = evr_server::attach_memory(&mut server_app);
 
     let (server_channels, client_channels) = {
         let channels = app.world().resource::<RepliconChannels>();
@@ -63,8 +77,43 @@ fn main() {
         false,
     );
     app.insert_resource(client);
-    app.insert_resource(transport);
-    app.insert_non_send(EmbeddedServer(server_app));
+
+    let my_id = match connect_addr {
+        Some(server_addr) => {
+            let current_time = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("system time must be after the epoch");
+            let client_id = current_time.as_nanos() as u64;
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0").expect("client socket must bind");
+            let transport = NetcodeClientTransport::new(
+                current_time,
+                ClientAuthentication::Unsecure {
+                    client_id,
+                    protocol_id: evr_server::PROTOCOL_ID,
+                    socket_id: 0,
+                    server_addr,
+                    user_data: None,
+                },
+                NativeSocket::new(socket).expect("client socket must be valid"),
+            )
+            .expect("client transport must be valid");
+            app.insert_resource(transport);
+            println!("evr-client: connecting to {server_addr} as {client_id}");
+            client_id
+        }
+        None => {
+            app.add_systems(First, step_embedded_server);
+            let mut server_app =
+                evr_server::build_server_app("content", evr_server::TickMode::Fixed)
+                    .expect("content pack must load");
+            let transport = evr_server::attach_memory(&mut server_app);
+            server_app.finish();
+            app.insert_resource(transport);
+            app.insert_non_send(EmbeddedServer(server_app));
+            evr_server::EMBEDDED_CLIENT_ID as u64
+        }
+    };
+    app.insert_resource(MyNetworkId(my_id));
 
     app.run();
 }

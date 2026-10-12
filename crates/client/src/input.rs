@@ -5,8 +5,9 @@ use evr_protocol::{
     BuyCommodity, DockedAt, PlanetTag, Position, RequestHyperjump, RequestLand, RequestLiftOff,
     SellCommodity, SetFiring, SetThrottle, SetTurn, ShipInfo, SystemMembership,
 };
-use evr_server::EMBEDDED_CLIENT_ID;
 use evr_server::gameplay::LAND_RANGE;
+
+use crate::MyNetworkId;
 
 #[derive(Resource, Default)]
 struct InputState {
@@ -62,6 +63,7 @@ fn poll_flight_input(
 }
 
 fn poll_action_input(
+    my_id: Res<MyNetworkId>,
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     content: Res<ClientContent>,
@@ -70,7 +72,7 @@ fn poll_action_input(
 ) {
     let Some((_, position, membership, docked)) = ships
         .iter()
-        .find(|(info, _, _, _)| info.owner == Some(EMBEDDED_CLIENT_ID as u64))
+        .find(|(info, _, _, _)| info.owner == Some(my_id.0))
     else {
         return;
     };

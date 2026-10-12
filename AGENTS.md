@@ -11,7 +11,8 @@ single-player.
 - test: `cargo test --workspace` (single crate: `cargo test -p evr-core`)
 - lint: `cargo clippy --workspace -- -D warnings`
 - format: `cargo fmt --all` (check: `cargo fmt --all --check`)
-- run server: `cargo run -p evr-server` (headless, runs from workspace root)
+- run server: `cargo run -p evr-server [port]` (standalone shard; UDP, defaults to 3456)
+- run client online: `cargo run -p evr-client -- --connect host:port`
 - run client: `cargo run -p evr-client` (desktop session required)
 - capture screenshots: `cargo run -p evr-client -- --capture-tour` (F12 in-game)
 
@@ -42,7 +43,9 @@ single-player.
 - Server is authoritative. Clients send intents (`crates/protocol`); they never
   mutate game state.
 - Offline play = the client embeds the server app (NonSendMut in evr-client) over a memory
-  transport; no second code path.
+  transport; no second code path. Online play swaps the transport for UDP; same wire protocol.
+- Server app must be finished AFTER attaching its transport (attach_memory/attach_udp);
+  build_server_app does not call finish() itself.
 - `evr-core` stays Bevy-free and I/O-free. Presentation belongs in `evr-client`.
 - Bevy/replicon/renet2 versions are pinned together (read docs/decisions/0005
   before upgrading). rustc >= 1.95 required by bevy 0.19.

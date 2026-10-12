@@ -28,6 +28,7 @@ impl Harness {
         let mut server =
             build_server_app(content_root, TickMode::PerUpdate).expect("server app must build");
         let transport = attach_memory(&mut server);
+        server.finish();
 
         let mut client = App::new();
         client.add_plugins(MinimalPlugins);
@@ -219,6 +220,7 @@ impl Harness {
                         "kind": match info.kind {
                             ShipKind::Player => "player",
                             ShipKind::Pirate => "pirate",
+                            ShipKind::Police => "police",
                         },
                         "position": [position.0.x, position.0.y],
                         "shields": hull.shields,
