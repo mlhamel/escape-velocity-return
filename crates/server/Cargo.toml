@@ -1,0 +1,14 @@
+[package]
+name = "evr-server"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy = { workspace = true, default-features = false, features = ["std", "multi_threaded"] }
+bevy_replicon.workspace = true
+bevy_replicon_renet2.workspace = true
+evr-data.workspace = true
+
+[lints]
+workspace = true

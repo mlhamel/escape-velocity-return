@@ -1,0 +1,20 @@
+(
+    id: "sol",
+    name: "Sol",
+    government: "confederation",
+    description: "The crowded heart of human space. Traffic control queues stretch past lunar orbit.",
+    position: (0.0, 0.0),
+    links: [],
+    planets: [
+        (
+            id: "earth",
+            name: "Earth",
+            description: "Cradle of humanity and seat of the Confederation. The sky bazaars sell everything except patience.",
+            commodities: [
+                (id: "food", price: 8),
+                (id: "machinery", price: 45),
+                (id: "medicine", price: 62),
+            ],
+        ),
+    ],
+)

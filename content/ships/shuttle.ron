@@ -1,0 +1,15 @@
+(
+    id: "shuttle",
+    name: "Shuttle",
+    description: "A tired little workhorse. Every legend in this galaxy started behind one of these consoles.",
+    price: 12000,
+    mass: 12.0,
+    turn_rate: 2.6,
+    acceleration: 95.0,
+    max_speed: 180.0,
+    max_shields: 40.0,
+    max_armor: 25.0,
+    fuel: 120,
+    cargo: 20,
+    weapon_slots: 2,
+)

@@ -1,0 +1,33 @@
+[package]
+name = "evr-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy = { workspace = true, default-features = false, features = [
+    "2d_bevy_render",
+    "ui_bevy_render",
+    "bevy_ui_widgets",
+    "picking",
+    "scene",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_state",
+    "reflect_auto_register",
+    "async_executor",
+    "bevy_winit",
+    "bevy_clipboard",
+    "default_font",
+    "multi_threaded",
+    "std",
+    "x11",
+    "wayland",
+    "custom_cursor",
+    "sysinfo_plugin",
+] }
+bevy_replicon.workspace = true
+bevy_replicon_renet2.workspace = true
+
+[lints]
+workspace = true
