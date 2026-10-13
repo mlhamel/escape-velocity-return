@@ -1,0 +1,21 @@
+(
+    id: "vega",
+    name: "Vega",
+    government: "independent",
+    description: "A trade crossroads where the cargo is honest and the paperwork isn't.",
+    position: (-1800.0, 800.0),
+    links: ["sol", "sirius", "wolf-359", "polaris"],
+    planets: [
+        (
+            id: "vega-station",
+            name: "Vega Station",
+            description: "A rotating wheel of merchants who measure trust in parsecs.",
+            commodities: [
+                (id: "food", price: 6),
+                (id: "machinery", price: 38),
+                (id: "medicine", price: 55),
+                (id: "luxury", price: 95),
+            ],
+        ),
+    ],
+)

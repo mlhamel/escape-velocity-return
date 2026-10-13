@@ -1,0 +1,20 @@
+(
+    id: "ross-154",
+    name: "Ross 154",
+    government: "pirate",
+    description: "A dim red star hiding a bright black market.",
+    position: (800.0, -3200.0),
+    links: ["new-kashmir", "tarsis"],
+    planets: [
+        (
+            id: "ross-market",
+            name: "The Night Market",
+            description: "Everything is for sale. The exit fee is negotiable at gunpoint.",
+            commodities: [
+                (id: "weapons", price: 30),
+                (id: "machinery", price: 32),
+                (id: "food", price: 16),
+            ],
+        ),
+    ],
+)

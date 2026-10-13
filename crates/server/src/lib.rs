@@ -14,8 +14,9 @@ use bevy::state::app::StatesPlugin;
 use bevy::time::Fixed;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet2::netcode::{
-    ClientAuthentication, NativeSocket, NetcodeClientTransport, NetcodeServerTransport,
-    ServerAuthentication, ServerSetupConfig, in_memory_server_addr, new_memory_sockets,
+    ClientAuthentication, MemorySocketClient, NativeSocket, NetcodeClientTransport,
+    NetcodeServerTransport, ServerAuthentication, ServerSetupConfig, in_memory_server_addr,
+    new_memory_sockets,
 };
 use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetServer};
 use bevy_replicon_renet2::{RenetChannelsExt, RepliconRenetPlugins};
@@ -69,7 +70,11 @@ pub fn build_server_app(
     Ok(app)
 }
 
-pub fn attach_memory(app: &mut App) -> NetcodeClientTransport {
+/// Attaches an in-memory transport to the server and returns the client-side
+/// transport plus a clone of the client socket. The socket can be used later
+/// with [`memory_reconnect_transport`] to re-establish the connection after a
+/// netcode timeout (the unsecure token allows 15 seconds without traffic).
+pub fn attach_memory(app: &mut App) -> (NetcodeClientTransport, MemorySocketClient) {
     let current_time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("system time must be after the epoch");
@@ -101,6 +106,17 @@ pub fn attach_memory(app: &mut App) -> NetcodeClientTransport {
     app.insert_resource(server_transport);
 
     let socket = client_sockets.pop().expect("one client socket must exist");
+    let transport = memory_reconnect_transport(&socket);
+    (transport, socket)
+}
+
+/// Builds a fresh client transport over the given memory socket. The socket
+/// can be reconnected after a netcode timeout; the server keeps its endpoint
+/// of the channel pair alive.
+pub fn memory_reconnect_transport(socket: &MemorySocketClient) -> NetcodeClientTransport {
+    let current_time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("system time must be after the epoch");
     NetcodeClientTransport::new(
         current_time,
         ClientAuthentication::Unsecure {
@@ -110,7 +126,7 @@ pub fn attach_memory(app: &mut App) -> NetcodeClientTransport {
             server_addr: in_memory_server_addr(),
             user_data: None,
         },
-        socket,
+        socket.clone(),
     )
     .expect("memory client transport must be valid")
 }

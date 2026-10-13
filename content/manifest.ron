@@ -10,6 +10,15 @@
     systems: [
         "systems/sol.ron",
         "systems/alpha-centauri.ron",
+        "systems/vega.ron",
+        "systems/sirius.ron",
+        "systems/wolf-359.ron",
+        "systems/barnard.ron",
+        "systems/procyon.ron",
+        "systems/tarsis.ron",
+        "systems/polaris.ron",
+        "systems/new-kashmir.ron",
+        "systems/ross-154.ron",
     ],
     outfits: [
         "outfits/light-blaster.ron",

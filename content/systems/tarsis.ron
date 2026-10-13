@@ -1,0 +1,21 @@
+(
+    id: "tarsis",
+    name: "Tarsis",
+    government: "pirate",
+    description: "A haven for people whose ships have more guns than cargo holds.",
+    position: (1600.0, -2200.0),
+    links: ["polaris", "alpha-centauri", "new-kashmir", "ross-154"],
+    planets: [
+        (
+            id: "tarsis-port",
+            name: "Freeport Tarsis",
+            description: "The only rule is the docking fee. Everything else is negotiation.",
+            commodities: [
+                (id: "weapons", price: 35),
+                (id: "machinery", price: 25),
+                (id: "luxury", price: 100),
+                (id: "food", price: 18),
+            ],
+        ),
+    ],
+)

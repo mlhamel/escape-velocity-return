@@ -1,0 +1,21 @@
+(
+    id: "sirius",
+    name: "Sirius",
+    government: "independent",
+    description: "Old money in old ships. The dog star bites.",
+    position: (-1200.0, -1600.0),
+    links: ["vega", "wolf-359", "new-kashmir"],
+    planets: [
+        (
+            id: "sirius-prime",
+            name: "Sirius Prime",
+            description: "A world of glittering domes and glittering debts.",
+            commodities: [
+                (id: "food", price: 9),
+                (id: "machinery", price: 52),
+                (id: "medicine", price: 48),
+                (id: "luxury", price: 88),
+            ],
+        ),
+    ],
+)

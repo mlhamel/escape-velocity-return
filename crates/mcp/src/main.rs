@@ -47,9 +47,9 @@ struct TradeArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct JumpArgs {
-    /// System id to jump to (must be a hyperlane link of the current system)
-    target: String,
+struct WarpArgs {
+    /// Enable warp drive
+    on: bool,
 }
 
 enum Command {
@@ -67,7 +67,9 @@ enum Command {
         qty: u32,
         buy: bool,
     },
-    Jump(String),
+    SetWarp {
+        on: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -170,17 +172,16 @@ impl GameMcp {
         }
     }
 
-    #[tool(
-        description = "Request a hyperjump to a linked system. Costs fuel. Returns the updated state."
-    )]
-    async fn jump(&self, Parameters(JumpArgs { target }): Parameters<JumpArgs>) -> String {
-        self.call(Command::Jump(target)).await
+    #[tool(description = "Toggle warp drive. Warp multiplies speed by 3 and drains fuel faster.")]
+    async fn warp(&self, Parameters(args): Parameters<WarpArgs>) -> String {
+        self.call(Command::SetWarp { on: args.on }).await
     }
 }
 
 fn game_thread(content_root: PathBuf, mut rx: mpsc::Receiver<(Command, oneshot::Sender<String>)>) {
     let mut harness = Harness::new(&content_root);
     while let Some((command, reply)) = rx.blocking_recv() {
+        harness.ensure_connected();
         let _ = reply.send(match command {
             Command::Advance(ticks) => {
                 harness.advance(ticks);
@@ -219,8 +220,8 @@ fn game_thread(content_root: PathBuf, mut rx: mpsc::Receiver<(Command, oneshot::
                 harness.advance(SETTLE_TICKS);
                 json(&harness.observe())
             }
-            Command::Jump(target) => {
-                harness.jump(&target);
+            Command::SetWarp { on } => {
+                harness.set_warp(on);
                 harness.advance(SETTLE_TICKS);
                 json(&harness.observe())
             }

@@ -1,5 +1,6 @@
 mod hud;
 mod input;
+mod minimap;
 mod screenshots;
 mod sky;
 mod sky_gen;
@@ -85,6 +86,7 @@ fn main() {
         input::InputPlugin,
         hud::HudPlugin,
         screenshots::ScreenshotPlugin,
+        minimap::MinimapPlugin,
         sky::SkyPlugin,
     ));
     app.add_systems(
@@ -138,7 +140,7 @@ fn main() {
             let mut server_app =
                 evr_server::build_server_app("content", evr_server::TickMode::Fixed, None)
                     .expect("content pack must load");
-            let transport = evr_server::attach_memory(&mut server_app);
+            let (transport, _socket) = evr_server::attach_memory(&mut server_app);
             server_app.finish();
             app.insert_resource(transport);
             app.insert_non_send(EmbeddedServer(server_app));

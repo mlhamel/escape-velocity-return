@@ -1,0 +1,21 @@
+(
+    id: "procyon",
+    name: "Procyon",
+    government: "confederation",
+    description: "Bright, orderly, and aggressively boring. The border of civilized space.",
+    position: (3600.0, 1200.0),
+    links: ["barnard", "alpha-centauri"],
+    planets: [
+        (
+            id: "procyon-relay",
+            name: "Relay Station",
+            description: "The last stop for coffee before the frontier.",
+            commodities: [
+                (id: "food", price: 12),
+                (id: "machinery", price: 48),
+                (id: "medicine", price: 50),
+                (id: "luxury", price: 120),
+            ],
+        ),
+    ],
+)

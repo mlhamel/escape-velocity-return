@@ -12,7 +12,7 @@ fn base_pack_loads() {
 
     assert_eq!(pack.manifest.id, "evr-base");
     assert_eq!(pack.ships.len(), 3);
-    assert_eq!(pack.systems.len(), 2);
+    assert_eq!(pack.systems.len(), 11);
     assert_eq!(pack.outfits.len(), 1);
 
     let shuttle = pack.ship("shuttle").expect("shuttle exists");
@@ -23,12 +23,13 @@ fn base_pack_loads() {
     assert_eq!(sol.government, "confederation");
     assert_eq!(sol.planets.len(), 1);
     assert_eq!(sol.planets[0].commodities.len(), 3);
-    assert_eq!(sol.links, vec!["alpha-centauri".to_owned()]);
+    assert!(sol.links.contains(&"alpha-centauri".to_owned()));
+    assert!(sol.links.contains(&"vega".to_owned()));
 
     let alpha = pack
         .system("alpha-centauri")
         .expect("alpha centauri exists");
-    assert_eq!(alpha.links, vec!["sol".to_owned()]);
+    assert!(alpha.links.contains(&"sol".to_owned()));
 
     let blaster = pack.outfit("light-blaster").expect("light-blaster exists");
     let evr_data::OutfitKind::Weapon(weapon) = &blaster.kind;

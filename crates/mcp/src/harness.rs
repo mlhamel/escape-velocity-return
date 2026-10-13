@@ -5,14 +5,20 @@ use bevy::app::PostUpdate;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use bevy_replicon::prelude::*;
-use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetClient};
+use bevy_replicon_renet2::netcode::{
+    ClientSocket, MemorySocketClient, NetcodeClientTransport, NetcodeServerTransport,
+};
+use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetClient, RenetServer};
 use bevy_replicon_renet2::{RenetChannelsExt, RepliconRenetPlugins};
 use evr_protocol::{
     AccountState, BuyCommodity, DockedAt, Hull, Notice, PlanetTag, PlayerDied, Position,
-    Projectile, RequestHyperjump, RequestLand, RequestLiftOff, SellCommodity, SetFiring,
-    SetThrottle, SetTurn, ShipInfo, ShipKind, SystemMembership,
+    Projectile, RequestLand, RequestLiftOff, SellCommodity, SetFiring, SetThrottle, SetTurn,
+    SetWarp, ShipInfo, ShipKind, SystemMembership,
 };
-use evr_server::{Content, EMBEDDED_CLIENT_ID, TickMode, attach_memory, build_server_app};
+use evr_server::{
+    Content, EMBEDDED_CLIENT_ID, TickMode, attach_memory, build_server_app,
+    memory_reconnect_transport,
+};
 
 #[derive(Resource, Default)]
 pub struct NoticeLog(pub Vec<String>);
@@ -21,13 +27,14 @@ pub struct Harness {
     pub server: App,
     pub client: App,
     pub ticks: u64,
+    client_socket: MemorySocketClient,
 }
 
 impl Harness {
     pub fn new(content_root: &Path) -> Self {
         let mut server = build_server_app(content_root, TickMode::PerUpdate, None)
             .expect("server app must build");
-        let transport = attach_memory(&mut server);
+        let (transport, client_socket) = attach_memory(&mut server);
         server.finish();
 
         let mut client = App::new();
@@ -56,6 +63,7 @@ impl Harness {
             server,
             client,
             ticks: 0,
+            client_socket,
         };
         let mut connect_steps = 0;
         while !harness
@@ -83,6 +91,82 @@ impl Harness {
 
     pub fn advance(&mut self, ticks: u32) {
         for _ in 0..ticks {
+            self.step();
+        }
+    }
+
+    /// Restores the connection after an idle gap. The netcode transport drops
+    /// the connection after 15 seconds without traffic, so callers that pause
+    /// between commands must call this before touching the game.
+    ///
+    /// The renet client only notices the drop one update later, so this checks
+    /// the transport's own netcode state, which is updated synchronously.
+    pub fn ensure_connected(&mut self) {
+        self.step();
+        let connected = {
+            let transport = self
+                .client
+                .world()
+                .resource::<bevy_replicon_renet2::netcode::NetcodeClientTransport>();
+            transport.is_connected()
+        };
+        if connected {
+            return;
+        }
+        self.force_reconnect();
+    }
+
+    /// Replaces the client transport and re-establishes the connection over
+    /// the same memory socket. Server-side game state is untouched; the
+    /// server rebinds the existing player to the new client entity.
+    pub fn force_reconnect(&mut self) {
+        self.server.world_mut().resource_scope(
+            |world, mut transport: Mut<NetcodeServerTransport>| {
+                world.resource_scope(|_, mut renet: Mut<RenetServer>| {
+                    transport.disconnect_all(&mut renet);
+                });
+            },
+        );
+
+        {
+            let mut buffer = vec![0u8; 4096];
+            while self.client_socket.try_recv(&mut buffer).is_ok() {}
+        }
+
+        {
+            let mut remote = self
+                .client
+                .world_mut()
+                .query_filtered::<Entity, With<Remote>>();
+            let world = self.client.world_mut();
+            for entity in remote.iter(world).collect::<Vec<_>>() {
+                world.despawn(entity);
+            }
+        }
+
+        let (server_channels, client_channels) = {
+            let channels = self.client.world().resource::<RepliconChannels>();
+            (channels.server_configs(), channels.client_configs())
+        };
+        self.client
+            .world_mut()
+            .remove_resource::<NetcodeClientTransport>();
+        self.client.world_mut().remove_resource::<RenetClient>();
+        self.client.world_mut().insert_resource(RenetClient::new(
+            ConnectionConfig::from_channels(server_channels, client_channels),
+            false,
+        ));
+        self.client
+            .world_mut()
+            .insert_resource(memory_reconnect_transport(&self.client_socket));
+
+        let mut connect_steps = 0;
+        while !self.client.world().resource::<RenetClient>().is_connected() {
+            self.step();
+            connect_steps += 1;
+            assert!(connect_steps < 300, "client must reconnect");
+        }
+        for _ in 0..10 {
             self.step();
         }
     }
@@ -121,10 +205,8 @@ impl Harness {
         });
     }
 
-    pub fn jump(&mut self, target: &str) {
-        self.client.world_mut().client_trigger(RequestHyperjump {
-            target: target.to_owned(),
-        });
+    pub fn set_warp(&mut self, on: bool) {
+        self.client.world_mut().client_trigger(SetWarp(on));
     }
 
     pub fn observe(&mut self) -> serde_json::Value {

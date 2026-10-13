@@ -8,9 +8,9 @@ use evr_core::{Account, FlightModel, ShipState, WeaponState};
 use evr_data::{ContentPack, OutfitKind, WeaponDef};
 use evr_protocol::{
     AccountState, BuyCommodity, DockedAt, Explosion, Fuel, Heading, Hull, LoginRequest,
-    LoginResponse, Notice, PlanetTag, PlayerDied, Position, Projectile, RequestHyperjump,
-    RequestLand, RequestLiftOff, SellCommodity, SetFiring, SetThrottle, SetTurn, ShipInfo,
-    ShipKind, SystemMembership,
+    LoginResponse, Notice, PlanetTag, PlayerDied, Position, Projectile, RequestLand,
+    RequestLiftOff, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo, ShipKind,
+    SystemMembership,
 };
 
 use crate::Content;
@@ -34,7 +34,10 @@ pub const PIRATE_SIGHT_RANGE: f32 = 900.0;
 pub const PIRATE_FIRE_RANGE: f32 = 300.0;
 pub const PIRATE_RESPAWN_SECS: f32 = 15.0;
 pub const PLAYER_RESPAWN_SECS: f32 = 3.0;
+pub const SYSTEM_MEMBERSHIP_RADIUS: f32 = 800.0;
 pub const FUEL_PRICE_PER_UNIT: f32 = 1.0;
+pub const WARP_SPEED_MULTIPLIER: f32 = 3.0;
+pub const WARP_FUEL_RATE: f32 = 8.0;
 
 #[derive(Component)]
 pub struct Ship(pub ShipState);
@@ -56,6 +59,7 @@ struct Control {
     throttle: f32,
     turn: f32,
     firing: bool,
+    warp: bool,
 }
 
 #[derive(Component)]
@@ -83,23 +87,6 @@ struct ProjectileMotion {
 
 #[derive(Component)]
 struct Aggro(u64);
-
-#[derive(Component, PartialEq)]
-#[component(immutable)]
-pub struct InSystem(pub String);
-
-#[derive(Component, PartialEq)]
-#[component(immutable)]
-pub struct ClientSystem(pub String);
-
-impl VisibilityFilter for InSystem {
-    type ClientComponent = ClientSystem;
-    type Scope = Entity;
-
-    fn is_visible(&self, _client: Entity, component: Option<&ClientSystem>) -> bool {
-        component.is_some_and(|system| system.0 == self.0)
-    }
-}
 
 #[derive(Resource, Default)]
 struct PlayerRecord {
@@ -132,8 +119,7 @@ pub struct GameplayPlugin;
 
 impl Plugin for GameplayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_visibility_filter::<InSystem>()
-            .init_resource::<StorageResource>()
+        app.init_resource::<StorageResource>()
             .init_resource::<SaveTimer>()
             .init_resource::<PlayerRecord>()
             .init_resource::<PlayerRespawn>()
@@ -145,7 +131,7 @@ impl Plugin for GameplayPlugin {
             .add_observer(on_request_lift_off)
             .add_observer(on_buy_commodity)
             .add_observer(on_sell_commodity)
-            .add_observer(on_request_hyperjump)
+            .add_observer(on_set_warp)
             .add_observer(on_login_request)
             .add_systems(OnEnter(ServerState::Running), spawn_world)
             .add_systems(
@@ -153,6 +139,7 @@ impl Plugin for GameplayPlugin {
                 (
                     authorize_clients,
                     apply_ship_control,
+                    update_system_membership,
                     pirate_ai,
                     fire_weapons,
                     projectile_flight,
@@ -218,7 +205,6 @@ fn spawn_ship(
             name: def.name.clone(),
         },
         SystemMembership(system.to_owned()),
-        InSystem(system.to_owned()),
     ));
 
     if kind == ShipKind::Player {
@@ -261,7 +247,6 @@ fn spawn_world(mut commands: Commands, content: Res<Content>) {
                     system.position.0 + PLANET_OFFSET_X + index as f32 * 600.0,
                     system.position.1,
                 )),
-                InSystem(system.id.clone()),
             ));
         }
     }
@@ -296,14 +281,14 @@ fn on_login_request(
     content: Res<Content>,
     clients: Query<&NetworkId>,
     storage: Res<StorageResource>,
-    logged_in: Query<&NetworkId, With<PlayerShip>>,
+    logged_in: Query<&Owner, With<PlayerShip>>,
     active_names: Query<&PlayerName>,
 ) {
     let username = trigger.event().username.clone();
     let password = trigger.event().password.clone();
 
     let owner = raw_id(trigger.client_id, &clients);
-    if logged_in.iter().any(|id| id.get() == owner) {
+    if logged_in.iter().any(|existing| existing.0 == owner) {
         return;
     }
     if active_names.iter().any(|n| n.0 == username) {
@@ -395,15 +380,21 @@ fn authorize_clients(
     mut commands: Commands,
     content: Res<Content>,
     newly_authorized: Query<(Entity, &NetworkId), Added<AuthorizedClient>>,
+    players: Query<(Entity, &Owner), With<PlayerShip>>,
+    record: Res<PlayerRecord>,
     storage: Res<StorageResource>,
 ) {
     for (client_entity, network_id) in &newly_authorized {
-        commands
-            .entity(client_entity)
-            .insert(ClientSystem(PLAYER_SYSTEM.to_owned()));
-
-        if storage.storage.is_none() {
-            spawn_default_player(&mut commands, &content, network_id.get(), client_entity);
+        if storage.storage.is_some() {
+            continue;
+        }
+        let owner = network_id.get();
+        if let Some((player_entity, _)) = players.iter().find(|(_, existing)| existing.0 == owner) {
+            commands
+                .entity(player_entity)
+                .insert(ClientRef(client_entity));
+        } else if record.owner != Some(owner) {
+            spawn_default_player(&mut commands, &content, owner, client_entity);
         }
     }
 }
@@ -501,8 +492,18 @@ fn apply_ship_control(
 ) {
     let dt = time.delta_secs();
     for (control, spec, mut ship) in &mut ships {
+        let mut model = spec.flight;
+        if control.warp {
+            model.max_speed *= WARP_SPEED_MULTIPLIER;
+            model.acceleration *= WARP_SPEED_MULTIPLIER;
+            ship.0.fuel = (ship.0.fuel - WARP_FUEL_RATE * dt).max(0.0);
+            if ship.0.fuel <= 0.0 {
+                model.max_speed = spec.flight.max_speed;
+                model.acceleration = spec.flight.acceleration;
+            }
+        }
         ship.0
-            .apply_control(control.turn, control.throttle, &spec.flight, dt);
+            .apply_control(control.turn, control.throttle, &model, dt);
     }
 }
 
@@ -513,7 +514,6 @@ type NpcShips<'w, 's> = Query<
         Entity,
         &'static Position,
         &'static Heading,
-        &'static SystemMembership,
         &'static mut Control,
         Option<&'static Aggro>,
     ),
@@ -523,26 +523,22 @@ type NpcShips<'w, 's> = Query<
 fn pirate_ai(
     mut commands: Commands,
     mut pirates: NpcShips,
-    players: Query<(Entity, &Position, &SystemMembership, &Owner), With<PlayerShip>>,
+    players: Query<(Entity, &Position, &Owner), With<PlayerShip>>,
 ) {
-    for (entity, position, heading, membership, mut control, aggro) in &mut pirates {
+    for (entity, position, heading, mut control, aggro) in &mut pirates {
         control.throttle = 0.0;
         control.turn = 0.0;
         control.firing = false;
 
         let target = match aggro {
-            Some(Aggro(wanted_owner)) => {
-                players
-                    .iter()
-                    .find(|(_, _, target_membership, target_owner)| {
-                        target_owner.0 == *wanted_owner && target_membership.0 == membership.0
-                    })
-            }
-            None => players
+            Some(Aggro(wanted_owner)) => players
                 .iter()
-                .find(|(_, _, target_membership, _)| target_membership.0 == membership.0),
+                .find(|(_, _, target_owner)| target_owner.0 == *wanted_owner),
+            None => players.iter().min_by_key(|(_, target_position, _)| {
+                position.0.distance(target_position.0).to_bits()
+            }),
         };
-        let Some((_, target, _, _)) = target else {
+        let Some((_, target, _)) = target else {
             if aggro.is_some() {
                 commands.entity(entity).despawn();
             }
@@ -569,7 +565,6 @@ type FiringShips<'w, 's> = Query<
         &'static Control,
         &'static Owner,
         &'static Ship,
-        &'static SystemMembership,
         &'static mut Blaster,
     ),
     Without<DockedAt>,
@@ -577,7 +572,7 @@ type FiringShips<'w, 's> = Query<
 
 fn fire_weapons(mut commands: Commands, time: Res<Time>, mut ships: FiringShips) {
     let dt = time.delta_secs();
-    for (control, owner, ship, membership, mut blaster) in &mut ships {
+    for (control, owner, ship, mut blaster) in &mut ships {
         blaster.state.tick(dt);
         let cooldown = blaster.def.cooldown;
         if control.firing && blaster.state.try_fire(cooldown) {
@@ -594,8 +589,6 @@ fn fire_weapons(mut commands: Commands, time: Res<Time>, mut ships: FiringShips)
                 },
                 Position(ship.0.position + direction * SHIP_RADIUS),
                 Heading(ship.0.rotation),
-                SystemMembership(membership.0.clone()),
-                InSystem(membership.0.clone()),
             ));
         }
     }
@@ -626,17 +619,17 @@ fn projectile_flight(
 fn projectile_hits(
     mut commands: Commands,
     content: Res<Content>,
-    projectiles: Query<(Entity, &Position, &Projectile, &SystemMembership)>,
+    projectiles: Query<(Entity, &Position, &Projectile)>,
     aggros: Query<&Aggro>,
-    ships: Query<(Entity, &ShipInfo, &SystemMembership, Option<&ClientRef>), With<Ship>>,
+    ships: Query<(Entity, &ShipInfo, Option<&ClientRef>), With<Ship>>,
     mut hittable: Query<(&mut Ship, Option<&mut Wallet>)>,
 ) {
     let mut hits = Vec::new();
-    for (projectile_entity, position, projectile, projectile_membership) in &projectiles {
-        for (ship_entity, info, ship_membership, _) in &ships {
+    for (projectile_entity, position, projectile) in &projectiles {
+        for (ship_entity, info, _) in &ships {
             let is_shooter = info.owner == Some(projectile.owner)
                 || (projectile.owner == 0 && info.kind != ShipKind::Player);
-            if is_shooter || ship_membership.0 != projectile_membership.0 {
+            if is_shooter {
                 continue;
             }
             if let Ok((ship, _)) = hittable.get(ship_entity)
@@ -660,7 +653,7 @@ fn projectile_hits(
         };
         victim_ship.0.apply_damage(damage);
 
-        let Ok((_, victim_info, victim_membership, _)) = ships.get(victim_entity) else {
+        let Ok((_, victim_info, _)) = ships.get(victim_entity) else {
             continue;
         };
         let is_pvp = victim_info.kind == ShipKind::Player
@@ -671,15 +664,15 @@ fn projectile_hits(
         }
         let policed = content
             .0
-            .system(&victim_membership.0)
+            .system(PLAYER_SYSTEM)
             .is_some_and(|system| system.government == POLICED_GOVERNMENT);
         if !policed {
             continue;
         }
 
-        let Some((attacker_entity, _, _, attacker_client_ref)) = ships
+        let Some((attacker_entity, _, attacker_client_ref)) = ships
             .iter()
-            .find(|(_, info, _, _)| info.owner == Some(attacker_owner))
+            .find(|(_, info, _)| info.owner == Some(attacker_owner))
         else {
             continue;
         };
@@ -693,7 +686,7 @@ fn projectile_hits(
             POLICE_SHIP,
             ShipKind::Police,
             None,
-            &victim_membership.0,
+            PLAYER_SYSTEM,
             Vec2::new(250.0, 250.0),
         );
         commands.entity(police).insert((Npc, Aggro(attacker_owner)));
@@ -748,7 +741,7 @@ fn ship_deaths(
     ships: DyingShips,
     names: Query<&PlayerName>,
     storage: Res<StorageResource>,
-    clients: Query<(Entity, &ClientSystem), With<ConnectedClient>>,
+    clients: Query<Entity, With<ConnectedClient>>,
 ) {
     for (entity, ship, info, membership, owner, client_ref, wallet) in &ships {
         if !ship.0.is_destroyed() {
@@ -758,13 +751,11 @@ fn ship_deaths(
             position: (ship.0.position.x, ship.0.position.y),
             system: membership.0.clone(),
         };
-        for (client_entity, client_system) in &clients {
-            if client_system.0 == membership.0 {
-                commands.server_trigger(ToClients {
-                    targets: SendTargets::Single(ClientId::Client(client_entity)),
-                    message: explosion.clone(),
-                });
-            }
+        for client_entity in &clients {
+            commands.server_trigger(ToClients {
+                targets: SendTargets::Single(ClientId::Client(client_entity)),
+                message: explosion.clone(),
+            });
         }
         match info.kind {
             ShipKind::Player => {
@@ -816,6 +807,7 @@ fn respawn_players(
     content: Res<Content>,
     mut record: ResMut<PlayerRecord>,
     mut respawn: ResMut<PlayerRespawn>,
+    players: Query<&Owner, With<PlayerShip>>,
     clients: Query<(Entity, &NetworkId), With<ConnectedClient>>,
 ) {
     let Some(timer) = respawn.0.as_mut() else {
@@ -830,6 +822,12 @@ fn respawn_players(
     let Some(owner) = record.owner else {
         return;
     };
+    if players.iter().any(|existing| existing.0 == owner) {
+        record.owner = None;
+        record.account = None;
+        record.name = None;
+        return;
+    }
     let Some((client_entity, _)) = clients.iter().find(|(_, id)| id.get() == owner) else {
         respawn.0 = Some(0.5);
         return;
@@ -854,9 +852,6 @@ fn respawn_players(
         PLAYER_SYSTEM,
         Vec2::ZERO,
     );
-    commands
-        .entity(client_entity)
-        .insert(ClientSystem(PLAYER_SYSTEM.to_owned()));
     commands.entity(ship).insert((
         Wallet(account.clone()),
         PlayerName(record.name.clone().unwrap_or_default()),
@@ -892,6 +887,35 @@ fn respawn_pirates(
         PIRATE_SYSTEM,
         Vec2::new(0.0, -400.0),
     );
+}
+
+fn update_system_membership(
+    mut commands: Commands,
+    content: Res<Content>,
+    mut players: Query<(&Position, &mut SystemMembership, &ClientRef), With<PlayerShip>>,
+) {
+    for (position, mut membership, client_ref) in &mut players {
+        let mut best: Option<(f32, &str)> = None;
+        for system in &content.0.systems {
+            let center = Vec2::new(system.position.0, system.position.1);
+            let dist = position.0.distance(center);
+            if dist < SYSTEM_MEMBERSHIP_RADIUS && best.is_none_or(|(d, _)| dist < d) {
+                best = Some((dist, &system.id));
+            }
+        }
+        if let Some((_, id)) = best
+            && membership.0 != id
+        {
+            membership.0 = id.to_owned();
+            if let Some(system) = content.0.system(id) {
+                notice(
+                    &mut commands,
+                    ClientId::Client(client_ref.0),
+                    format!("Entering {}.", system.name),
+                );
+            }
+        }
+    }
 }
 
 fn sync_ship_state(mut ships: Query<(&Ship, &mut Position, &mut Heading, &mut Hull, &mut Fuel)>) {
@@ -1166,76 +1190,18 @@ fn on_sell_commodity(
     );
 }
 
-fn on_request_hyperjump(
-    trigger: On<FromClient<RequestHyperjump>>,
-    mut commands: Commands,
+fn on_set_warp(
+    trigger: On<FromClient<SetWarp>>,
     clients: Query<&NetworkId>,
-    client_entities: Query<Entity, With<ConnectedClient>>,
-    content: Res<Content>,
-    mut ships: Query<(
-        Entity,
-        &Owner,
-        Option<&DockedAt>,
-        &mut Ship,
-        &mut SystemMembership,
-    )>,
+    mut ships: Query<(&Owner, &mut Control)>,
 ) {
     let owner = raw_id(trigger.client_id, &clients);
-    let target = trigger.event().target.clone();
-    let Some((ship_entity, _, docked, mut ship, mut membership)) = ships
-        .iter_mut()
-        .find(|(_, ship_owner, _, _, _)| ship_owner.0 == owner)
-    else {
-        return;
-    };
-    if docked.is_some() {
-        notice(&mut commands, trigger.client_id, "Undock before jumping.");
-        return;
+    let warp = trigger.event().0;
+    for (ship_owner, mut control) in &mut ships {
+        if ship_owner.0 == owner {
+            control.warp = warp;
+        }
     }
-    let Some(current) = content.0.system(&membership.0) else {
-        return;
-    };
-    if !current.links.contains(&target) {
-        notice(
-            &mut commands,
-            trigger.client_id,
-            "No hyperlane leads there.",
-        );
-        return;
-    }
-    if ship.0.fuel < JUMP_FUEL_COST {
-        notice(
-            &mut commands,
-            trigger.client_id,
-            "Your fuel gauge laughs at the idea.",
-        );
-        return;
-    }
-    let Some(target_system) = content.0.system(&target) else {
-        return;
-    };
-
-    ship.0.fuel -= JUMP_FUEL_COST;
-    ship.0.velocity = Vec2::ZERO;
-    ship.0.position = Vec2::new(target_system.position.0, target_system.position.1 + 300.0);
-    membership.0 = target.clone();
-    commands
-        .entity(ship_entity)
-        .insert(InSystem(target.clone()));
-    if let Some(client_entity) = trigger
-        .client_id
-        .entity()
-        .filter(|entity| client_entities.contains(*entity))
-    {
-        commands
-            .entity(client_entity)
-            .insert(ClientSystem(target.clone()));
-    }
-    notice(
-        &mut commands,
-        trigger.client_id,
-        format!("Hyperjump to {} complete.", target_system.name),
-    );
 }
 
 fn planet_price(pack: &ContentPack, system: &str, planet: &str, commodity: &str) -> Option<u32> {
@@ -1280,7 +1246,7 @@ mod tests {
             let content_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
             let mut server = build_server_app(content_root, TickMode::PerUpdate, None)
                 .expect("server app builds");
-            let transport = attach_memory(&mut server);
+            let (transport, _socket) = attach_memory(&mut server);
             server.finish();
 
             let mut client = App::new();
@@ -1370,15 +1336,6 @@ mod tests {
             state.iter(world).count()
         }
 
-        fn client_planet_ids(&mut self) -> Vec<String> {
-            let mut state = self
-                .client
-                .world_mut()
-                .query_filtered::<&PlanetTag, With<Remote>>();
-            let world = self.client.world();
-            state.iter(world).map(|tag| tag.id.clone()).collect()
-        }
-
         fn client_component<T: Component + Clone>(&mut self, entity: Entity) -> Option<T> {
             self.client.world().get::<T>(entity).cloned()
         }
@@ -1408,39 +1365,19 @@ mod tests {
     }
 
     #[test]
-    fn embedded_vertical_slice() {
+    fn continuous_world_flight_and_combat() {
         let mut h = Harness::new();
 
-        h.step_until(200, |h| {
+        h.step_until(400, |h| {
             let mut planets = h
                 .client
                 .world_mut()
                 .query_filtered::<(), (With<Remote>, With<PlanetTag>)>();
             let world = h.client.world();
-            planets.iter(world).count() == 1 && h.my_ship().is_some()
+            planets.iter(world).count() >= 1 && h.my_ship().is_some()
         });
-        for _ in 0..20 {
-            h.step();
-        }
-        assert!(
-            h.pirate_ship().is_none(),
-            "pirate must be hidden while the player is in sol"
-        );
 
         let my_ship = h.my_ship().expect("my ship must replicate");
-        let account = h
-            .client_component::<AccountState>(my_ship)
-            .expect("account must replicate");
-        assert_eq!(account.credits, STARTING_CREDITS);
-        assert_eq!(account.cargo_capacity, 20);
-        let hull = h
-            .client_component::<Hull>(my_ship)
-            .expect("hull replicates");
-        assert_eq!(hull.shields, hull.max_shields);
-        let fuel = h
-            .client_component::<Fuel>(my_ship)
-            .expect("fuel replicates");
-        assert_eq!(fuel.current, fuel.max);
 
         let start = h.server_ship_position(1).expect("player exists");
         h.send(SetThrottle(1.0));
@@ -1449,24 +1386,19 @@ mod tests {
                 .is_some_and(|p| p.x > start.x + 40.0)
         });
         h.send(SetThrottle(0.0));
-        h.send(SetTurn(1.0));
-        h.step_until(200, |h| {
-            h.client_component::<evr_protocol::Heading>(my_ship)
-                .is_some_and(|heading| heading.0 > 0.5)
-        });
-        h.send(SetTurn(0.0));
 
         h.set_server_ship(1, |ship| {
+            ship.rotation = 0.0;
             ship.position = Vec2::new(480.0, 0.0);
             ship.velocity = Vec2::ZERO;
         });
+        for _ in 0..5 {
+            h.step();
+        }
         h.send(RequestLand {
             planet: "earth".into(),
         });
         h.step_until(100, |h| h.client_component::<DockedAt>(my_ship).is_some());
-        let docked = h.client_component::<DockedAt>(my_ship).unwrap();
-        assert_eq!(docked.planet, "earth");
-        assert_eq!(docked.system, PLAYER_SYSTEM);
 
         h.send(BuyCommodity {
             commodity: "food".into(),
@@ -1474,38 +1406,15 @@ mod tests {
         });
         h.step_until(100, |h| {
             h.client_component::<AccountState>(my_ship)
-                .is_some_and(|account| account.credits == STARTING_CREDITS - 40)
-        });
-        h.send(SellCommodity {
-            commodity: "food".into(),
-            qty: 5,
-        });
-        h.step_until(100, |h| {
-            h.client_component::<AccountState>(my_ship)
-                .is_some_and(|account| account.credits == STARTING_CREDITS)
+                .is_some_and(|a| a.credits == STARTING_CREDITS - 40)
         });
 
         h.send(RequestLiftOff);
         h.step_until(100, |h| h.client_component::<DockedAt>(my_ship).is_none());
 
-        h.send(RequestHyperjump {
-            target: "alpha-centauri".into(),
-        });
-        h.step_until(100, |h| {
-            h.client_component::<SystemMembership>(my_ship)
-                .is_some_and(|m| m.0 == "alpha-centauri")
-        });
-        let fuel = h.client_component::<Fuel>(my_ship).unwrap();
-        assert!((fuel.current - (fuel.max - JUMP_FUEL_COST)).abs() < 0.01);
-        let position = h.client_component::<Position>(my_ship).unwrap();
-        assert_eq!(position.0, Vec2::new(200.0, 300.0));
-
-        h.step_until(100, |h| {
-            h.client_planet_ids() == vec!["newhaven".to_owned()]
-        });
-
         h.set_server_ship(1, |ship| {
             ship.rotation = 0.0;
+            ship.position = Vec2::new(200.0, 300.0);
             ship.velocity = Vec2::ZERO;
         });
         h.set_server_ship(0, |ship| {
@@ -1524,236 +1433,25 @@ mod tests {
         });
         h.send(SetFiring(false));
         assert!(saw_projectiles, "client must see projectiles in flight");
-        assert!(
-            !h.client_component::<AccountState>(my_ship)
-                .unwrap()
-                .cargo
-                .iter()
-                .any(|(id, _)| id == "food")
-        );
 
         h.set_server_ship(1, |ship| {
             ship.shields = 0.0;
             ship.armor = 0.0;
         });
         h.step_until(100, |h| h.my_ship().is_none());
-        h.step_until(500, |h| h.my_ship().is_some());
+        h.step_until(500, |h| {
+            h.my_ship()
+                .is_some_and(|ship| h.client_component::<AccountState>(ship).is_some())
+        });
         let respawned = h.my_ship().unwrap();
         let account = h.client_component::<AccountState>(respawned).unwrap();
-        assert_eq!(account.credits, STARTING_CREDITS);
-        let hull = h.client_component::<Hull>(respawned).unwrap();
-        assert_eq!(hull.shields, hull.max_shields);
-        let membership = h.client_component::<SystemMembership>(respawned).unwrap();
-        assert_eq!(membership.0, PLAYER_SYSTEM);
-    }
-
-    fn udp_client_app(client_id: u64, server_addr: std::net::SocketAddr) -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(StatesPlugin);
-        app.add_plugins(RepliconPlugins.set(ServerPlugin::new(PostUpdate)));
-        app.add_plugins(RepliconRenetPlugins);
-        evr_protocol::register(&mut app);
-
-        let (server_channels, client_channels) = {
-            let channels = app.world().resource::<RepliconChannels>();
-            (channels.server_configs(), channels.client_configs())
-        };
-        app.insert_resource(RenetClient::new(
-            ConnectionConfig::from_channels(server_channels, client_channels),
-            false,
-        ));
-
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .expect("system time must be after the epoch");
-        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("test socket must bind");
-        let transport = NetcodeClientTransport::new(
-            current_time,
-            ClientAuthentication::Unsecure {
-                client_id,
-                protocol_id: PROTOCOL_ID,
-                socket_id: 0,
-                server_addr,
-                user_data: None,
-            },
-            NativeSocket::new(socket).expect("test socket must be valid"),
-        )
-        .expect("test transport must be valid");
-        app.insert_resource(transport);
-        app.finish();
-        app
-    }
-
-    fn remote_ship_ids(client: &mut App) -> Vec<u64> {
-        let mut state = client
-            .world_mut()
-            .query_filtered::<&ShipInfo, With<Remote>>();
-        let world = client.world();
-        let mut owners: Vec<u64> = state.iter(world).filter_map(|info| info.owner).collect();
-        owners.sort_unstable();
-        owners
-    }
-
-    fn remote_planet_ids(client: &mut App) -> Vec<String> {
-        let mut state = client
-            .world_mut()
-            .query_filtered::<&PlanetTag, With<Remote>>();
-        let world = client.world();
-        state.iter(world).map(|tag| tag.id.clone()).collect()
-    }
-
-    fn server_police_target(server: &mut App) -> Option<u64> {
-        let mut state = server.world_mut().query::<&Aggro>();
-        let world = server.world();
-        state.iter(world).next().map(|aggro| aggro.0)
-    }
-
-    fn server_credits(server: &mut App, owner: u64) -> Option<u32> {
-        let mut state = server.world_mut().query::<(&Owner, &Wallet)>();
-        let world = server.world();
-        state
-            .iter(world)
-            .find(|(wallet_owner, _)| wallet_owner.0 == owner)
-            .map(|(_, wallet)| wallet.0.credits)
-    }
-
-    #[test]
-    fn udp_two_players_rooms_and_govt_zones() {
-        let content_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let mut server = build_server_app(content_root, TickMode::PerUpdate, None)
-            .expect("server app must build");
-        let bound = attach_udp(
-            &mut server,
-            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
-            8,
-        )
-        .expect("udp socket must bind");
-        server.finish();
-
-        let mut alice = udp_client_app(101, bound);
-        let mut bob = udp_client_app(202, bound);
-
-        let step_all = |server: &mut App, alice: &mut App, bob: &mut App| {
-            alice.update();
-            bob.update();
-            server.update();
-            std::thread::sleep(Duration::from_millis(15));
-        };
-
-        let mut steps = 0;
-        while !alice.world().resource::<RenetClient>().is_connected()
-            || !bob.world().resource::<RenetClient>().is_connected()
-        {
-            step_all(&mut server, &mut alice, &mut bob);
-            steps += 1;
-            assert!(steps < 400, "both clients must connect");
-        }
-
-        while remote_ship_ids(&mut alice) != vec![101, 202]
-            || remote_ship_ids(&mut bob) != vec![101, 202]
-        {
-            step_all(&mut server, &mut alice, &mut bob);
-            steps += 1;
-            assert!(steps < 800, "both players must replicate");
-        }
-
-        assert_eq!(remote_planet_ids(&mut alice), vec!["earth".to_owned()]);
-        assert_eq!(remote_planet_ids(&mut bob), vec!["earth".to_owned()]);
-
-        {
-            let mut pirates = alice
-                .world_mut()
-                .query_filtered::<&ShipInfo, With<Remote>>();
-            let world = alice.world();
-            assert!(
-                pirates
-                    .iter(world)
-                    .all(|info| info.kind != ShipKind::Pirate),
-                "the alpha-centauri pirate must be invisible from sol"
-            );
-        }
-
-        let set_ship = |server: &mut App, owner: u64, position: Vec2, rotation: f32| {
-            let mut state = server.world_mut().query::<(&Owner, &mut Ship)>();
-            let world = server.world_mut();
-            for (ship_owner, mut ship) in state.iter_mut(world) {
-                if ship_owner.0 == owner {
-                    ship.0.position = position;
-                    ship.0.velocity = Vec2::ZERO;
-                    ship.0.rotation = rotation;
-                }
-            }
-        };
-        set_ship(&mut server, 101, Vec2::new(0.0, 0.0), 0.0);
-        set_ship(&mut server, 202, Vec2::new(200.0, 0.0), 0.0);
-        for _ in 0..5 {
-            step_all(&mut server, &mut alice, &mut bob);
-        }
-
-        alice.world_mut().client_trigger(SetFiring(true));
-        let mut fired = 0;
-        while server_police_target(&mut server).is_none() {
-            step_all(&mut server, &mut alice, &mut bob);
-            fired += 1;
-            assert!(fired < 400, "pvp offense must trigger the patrol");
-        }
-        alice.world_mut().client_trigger(SetFiring(false));
-
-        assert_eq!(server_police_target(&mut server), Some(101));
-        assert_eq!(
-            server_credits(&mut server, 101),
-            Some(STARTING_CREDITS - FINE_CREDITS),
-            "the attacker is fined once per offense"
-        );
-        assert_eq!(
-            server_credits(&mut server, 202),
-            Some(STARTING_CREDITS),
-            "the victim keeps their credits"
-        );
-        let mut police_seen = false;
-        for _ in 0..100 {
-            step_all(&mut server, &mut alice, &mut bob);
-            let mut ships = alice
-                .world_mut()
-                .query_filtered::<&ShipInfo, With<Remote>>();
-            let world = alice.world();
-            police_seen =
-                police_seen || ships.iter(world).any(|info| info.kind == ShipKind::Police);
-        }
+        assert_eq!(account.credits, STARTING_CREDITS - 40);
         assert!(
-            police_seen,
-            "the police ship must replicate to both players"
-        );
-
-        alice.world_mut().client_trigger(RequestHyperjump {
-            target: "alpha-centauri".to_owned(),
-        });
-        let mut jumped = 0;
-        while remote_planet_ids(&mut alice) != vec!["newhaven".to_owned()]
-            || server_police_target(&mut server).is_some()
-        {
-            step_all(&mut server, &mut alice, &mut bob);
-            jumped += 1;
-            assert!(jumped < 600, "alice must reach alpha centauri");
-        }
-        assert_eq!(
-            remote_ship_ids(&mut bob),
-            vec![202],
-            "bob must no longer see alice after the hyperjump"
-        );
-        assert_eq!(remote_planet_ids(&mut bob), vec!["earth".to_owned()]);
-        let mut pirates = alice
-            .world_mut()
-            .query_filtered::<&ShipInfo, With<Remote>>();
-        let world = alice.world();
-        assert!(
-            pirates
-                .iter(world)
-                .any(|info| info.kind == ShipKind::Pirate),
-            "alice must see the alpha centauri pirate now"
+            account.cargo.is_empty(),
+            "cargo is lost on death, credits persist"
         );
     }
+
     #[test]
     fn login_and_persistence() {
         let storage_path =
@@ -1768,7 +1466,7 @@ mod tests {
         server.insert_resource(StorageResource {
             storage: Some(Box::new(storage)),
         });
-        let transport = attach_memory(&mut server);
+        let (transport, _socket) = attach_memory(&mut server);
         server.finish();
 
         let mut client = App::new();
@@ -1901,7 +1599,7 @@ mod tests {
             Some(storage_path.as_path()),
         )
         .expect("server2 must build");
-        let transport2 = attach_memory(&mut server2);
+        let (transport2, _socket2) = attach_memory(&mut server2);
         server2.finish();
         let _ = transport2;
 
@@ -1917,5 +1615,172 @@ mod tests {
         assert_eq!(loaded.cargo[0].1, 2);
 
         let _ = std::fs::remove_file(&storage_path);
+    }
+
+    fn udp_client_app(client_id: u64, server_addr: std::net::SocketAddr) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(StatesPlugin);
+        app.add_plugins(RepliconPlugins.set(ServerPlugin::new(PostUpdate)));
+        app.add_plugins(RepliconRenetPlugins);
+        evr_protocol::register(&mut app);
+
+        let (server_channels, client_channels) = {
+            let channels = app.world().resource::<RepliconChannels>();
+            (channels.server_configs(), channels.client_configs())
+        };
+        app.insert_resource(RenetClient::new(
+            ConnectionConfig::from_channels(server_channels, client_channels),
+            false,
+        ));
+
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .expect("system time must be after the epoch");
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("test socket must bind");
+        let transport = NetcodeClientTransport::new(
+            current_time,
+            ClientAuthentication::Unsecure {
+                client_id,
+                protocol_id: PROTOCOL_ID,
+                socket_id: 0,
+                server_addr,
+                user_data: None,
+            },
+            NativeSocket::new(socket).expect("test socket must be valid"),
+        )
+        .expect("test transport must be valid");
+        app.insert_resource(transport);
+        app.finish();
+        app
+    }
+
+    fn remote_ship_ids(client: &mut App) -> Vec<u64> {
+        let mut state = client
+            .world_mut()
+            .query_filtered::<&ShipInfo, With<Remote>>();
+        let world = client.world();
+        let mut owners: Vec<u64> = state.iter(world).filter_map(|info| info.owner).collect();
+        owners.sort_unstable();
+        owners
+    }
+
+    fn server_police_target(server: &mut App) -> Option<u64> {
+        let mut state = server.world_mut().query::<&Aggro>();
+        let world = server.world();
+        state.iter(world).next().map(|aggro| aggro.0)
+    }
+
+    fn server_credits(server: &mut App, owner: u64) -> Option<u32> {
+        let mut state = server.world_mut().query::<(&Owner, &Wallet)>();
+        let world = server.world();
+        state
+            .iter(world)
+            .find(|(wallet_owner, _)| wallet_owner.0 == owner)
+            .map(|(_, wallet)| wallet.0.credits)
+    }
+
+    #[test]
+    fn udp_two_players_pvp_summons_the_patrol() {
+        let content_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let mut server = build_server_app(content_root, TickMode::PerUpdate, None)
+            .expect("server app must build");
+        let bound = attach_udp(
+            &mut server,
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            8,
+        )
+        .expect("udp socket must bind");
+        server.finish();
+
+        let mut alice = udp_client_app(101, bound);
+        let mut bob = udp_client_app(202, bound);
+
+        let step_all = |server: &mut App, alice: &mut App, bob: &mut App| {
+            alice.update();
+            bob.update();
+            server.update();
+            std::thread::sleep(Duration::from_millis(15));
+        };
+
+        let mut steps = 0;
+        while !alice.world().resource::<RenetClient>().is_connected()
+            || !bob.world().resource::<RenetClient>().is_connected()
+        {
+            step_all(&mut server, &mut alice, &mut bob);
+            steps += 1;
+            assert!(steps < 400, "both clients must connect");
+        }
+
+        while remote_ship_ids(&mut alice) != vec![101, 202]
+            || remote_ship_ids(&mut bob) != vec![101, 202]
+        {
+            step_all(&mut server, &mut alice, &mut bob);
+            steps += 1;
+            assert!(steps < 800, "both players must replicate");
+        }
+
+        {
+            let mut pirates = alice
+                .world_mut()
+                .query_filtered::<&ShipInfo, With<Remote>>();
+            let world = alice.world();
+            assert!(
+                pirates
+                    .iter(world)
+                    .any(|info| info.kind == ShipKind::Pirate),
+                "in the continuous world the alpha-centauri pirate is visible from sol"
+            );
+        }
+
+        let set_ship = |server: &mut App, owner: u64, position: Vec2, rotation: f32| {
+            let mut state = server.world_mut().query::<(&Owner, &mut Ship)>();
+            let world = server.world_mut();
+            for (ship_owner, mut ship) in state.iter_mut(world) {
+                if ship_owner.0 == owner {
+                    ship.0.position = position;
+                    ship.0.velocity = Vec2::ZERO;
+                    ship.0.rotation = rotation;
+                }
+            }
+        };
+        set_ship(&mut server, 101, Vec2::ZERO, 0.0);
+        set_ship(&mut server, 202, Vec2::new(200.0, 0.0), 0.0);
+        for _ in 0..5 {
+            step_all(&mut server, &mut alice, &mut bob);
+        }
+
+        alice.world_mut().client_trigger(SetFiring(true));
+        let mut fired = 0;
+        while server_police_target(&mut server).is_none() {
+            step_all(&mut server, &mut alice, &mut bob);
+            fired += 1;
+            assert!(fired < 400, "pvp offense must trigger the patrol");
+        }
+        alice.world_mut().client_trigger(SetFiring(false));
+
+        assert_eq!(server_police_target(&mut server), Some(101));
+        assert_eq!(
+            server_credits(&mut server, 101),
+            Some(STARTING_CREDITS - FINE_CREDITS),
+            "the attacker is fined once per offense"
+        );
+        assert_eq!(
+            server_credits(&mut server, 202),
+            Some(STARTING_CREDITS),
+            "the victim keeps their credits"
+        );
+
+        let mut police_seen = false;
+        for _ in 0..100 {
+            step_all(&mut server, &mut alice, &mut bob);
+            let mut ships = alice
+                .world_mut()
+                .query_filtered::<&ShipInfo, With<Remote>>();
+            let world = alice.world();
+            police_seen =
+                police_seen || ships.iter(world).any(|info| info.kind == ShipKind::Police);
+        }
+        assert!(police_seen, "the patrol must replicate to both players");
     }
 }

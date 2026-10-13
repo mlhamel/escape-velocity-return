@@ -1,0 +1,21 @@
+(
+    id: "barnard",
+    name: "Barnard's Star",
+    government: "confederation",
+    description: "A red dwarf with a navy dockyard and opinions about your manifest.",
+    position: (2600.0, 500.0),
+    links: ["sol", "procyon"],
+    planets: [
+        (
+            id: "barnard-dock",
+            name: "Dockyard Nine",
+            description: "Where the Confederation patches its hulls and its pride.",
+            commodities: [
+                (id: "food", price: 10),
+                (id: "machinery", price: 40),
+                (id: "weapons", price: 65),
+                (id: "medicine", price: 58),
+            ],
+        ),
+    ],
+)

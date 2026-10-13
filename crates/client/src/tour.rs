@@ -4,8 +4,8 @@ use bevy::math::Vec2;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use evr_protocol::{
-    BuyCommodity, DockedAt, Heading, PlanetTag, Position, RequestHyperjump, RequestLand, SetFiring,
-    SetThrottle, SetTurn, ShipInfo, ShipKind, SystemMembership,
+    BuyCommodity, DockedAt, Heading, PlanetTag, Position, RequestLand, SetFiring, SetThrottle,
+    SetTurn, SetWarp, ShipInfo, ShipKind, SystemMembership,
 };
 
 use crate::MyNetworkId;
@@ -116,15 +116,18 @@ fn run_tour(
             }
         }
         TourStage::JumpToAlpha => {
-            if !tour.actioned {
-                tour.actioned = true;
-                commands.client_trigger(RequestHyperjump {
-                    target: "alpha-centauri".to_owned(),
-                });
-            } else if membership.0 == "alpha-centauri" {
+            let alpha_target = Vec2::new(1500.0, 0.0);
+            let distance = position.0.distance(alpha_target);
+            if distance < 250.0 {
+                commands.client_trigger(SetWarp(false));
                 tour.stage = TourStage::Duel;
                 tour.actioned = false;
                 tour.ticks = 0;
+            } else {
+                let (turn, throttle) = steer(position.0, heading.0, alpha_target);
+                commands.client_trigger(SetTurn(turn));
+                commands.client_trigger(SetThrottle(throttle));
+                commands.client_trigger(SetWarp(true));
             }
         }
         TourStage::Duel => {

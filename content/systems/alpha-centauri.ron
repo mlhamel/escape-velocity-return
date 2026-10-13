@@ -3,8 +3,8 @@
     name: "Alpha Centauri",
     government: "independent",
     description: "A frontier system where the paperwork is thin and the patronage is thinner.",
-    position: (200.0, 0.0),
-    links: ["sol"],
+    position: (2000.0, 0.0),
+    links: ["sol", "procyon", "tarsis"],
     planets: [
         (
             id: "newhaven",

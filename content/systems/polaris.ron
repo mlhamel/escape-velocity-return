@@ -1,0 +1,20 @@
+(
+    id: "polaris",
+    name: "Polaris",
+    government: "independent",
+    description: "The far end of nowhere. The stars are close and the law is far.",
+    position: (-2000.0, -2400.0),
+    links: ["tarsis", "vega", "wolf-359"],
+    planets: [
+        (
+            id: "polaris-outpost",
+            name: "Outpost Zero",
+            description: "The coldest corner of the galaxy. The drinks are strong and the questions are few.",
+            commodities: [
+                (id: "food", price: 20),
+                (id: "machinery", price: 28),
+                (id: "medicine", price: 75),
+            ],
+        ),
+    ],
+)

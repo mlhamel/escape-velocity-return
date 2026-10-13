@@ -5,7 +5,7 @@ use evr_protocol::{
     AccountState, DockedAt, Fuel, Hull, Notice, PlanetTag, PlayerDied, Position, ShipInfo,
     SystemMembership,
 };
-use evr_server::gameplay::{JUMP_FUEL_COST, LAND_RANGE};
+use evr_server::gameplay::LAND_RANGE;
 
 use crate::MyNetworkId;
 use crate::input::ClientContent;
@@ -322,15 +322,7 @@ fn update_hud(
         if let Some((planet, _)) = candidate {
             prompts.push(format!("L — land on {}", planet.name));
         }
-        let jump_target = content
-            .0
-            .system(&membership.0)
-            .and_then(|system| system.links.first())
-            .and_then(|link| content.0.system(link))
-            .map(|system| system.name.clone());
-        if let Some(target) = jump_target {
-            prompts.push(format!("J — jump to {target} ({JUMP_FUEL_COST:.0} fuel)"));
-        }
+        prompts.push("J — warp drive".to_owned());
     }
     set_text(&mut texts, layout.prompt_line, prompts.join("   "));
     set_text(&mut texts, layout.trade_block, trade);

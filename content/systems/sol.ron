@@ -4,7 +4,7 @@
     government: "confederation",
     description: "The crowded heart of human space. Traffic control queues stretch past lunar orbit.",
     position: (0.0, 0.0),
-    links: ["alpha-centauri"],
+    links: ["alpha-centauri", "vega", "wolf-359", "barnard"],
     planets: [
         (
             id: "earth",

@@ -2,6 +2,8 @@ use std::f64::consts::PI;
 use std::path::Path;
 
 use evr_mcp::Harness;
+use evr_protocol::ShipInfo;
+use evr_server::EMBEDDED_CLIENT_ID;
 use serde_json::Value;
 
 fn steer_to(target: [f64; 2], position: [f64; 2], heading: f64) -> (f32, f32) {
@@ -80,7 +82,13 @@ fn agent_playthrough() {
     harness.advance(10);
     assert_eq!(harness.observe()["docked"], Value::Null);
 
-    harness.jump("alpha-centauri");
+    harness.set_warp(true);
+    assert!(
+        fly_to(&mut harness, [1250.0, 0.0], 60.0, 600),
+        "must reach alpha centauri space"
+    );
+    harness.set_flight(0.0, 0.0, false);
+    harness.set_warp(false);
     harness.advance(10);
     let state = harness.observe();
     assert_eq!(state["system"], "alpha-centauri");
@@ -93,8 +101,79 @@ fn agent_playthrough() {
             .any(|s| s["kind"] == "pirate"),
         "pirate must be present in the system"
     );
+
+    let newhaven = state["planets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "newhaven")
+        .expect("newhaven visible from alpha centauri space")
+        .clone();
+    let newhaven_pos = vec2(&newhaven, "position");
+    harness.set_warp(true);
+    assert!(
+        fly_to(&mut harness, newhaven_pos, 250.0, 600),
+        "must reach newhaven"
+    );
+    harness.set_flight(0.0, 0.0, false);
+    harness.set_warp(false);
+    harness.land("newhaven");
+    harness.advance(20);
+    let state = harness.observe();
+    assert_eq!(state["docked"], "newhaven");
     assert!(
         !state["notices"].as_array().unwrap().is_empty(),
         "notices must have accumulated"
     );
+}
+
+#[test]
+fn forced_reconnect_keeps_the_game_responsive() {
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let mut harness = Harness::new(&content);
+
+    assert!(
+        fly_to(&mut harness, [300.0, 0.0], 60.0, 200),
+        "flight must work before the forced reconnect"
+    );
+
+    harness.force_reconnect();
+
+    assert!(
+        fly_to(&mut harness, [600.0, 0.0], 60.0, 200),
+        "flight must still work after a forced reconnect"
+    );
+}
+
+#[test]
+fn harness_survives_idle_gap() {
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let mut harness = Harness::new(&content);
+
+    let state = harness.observe();
+    let start = vec2(&state["ship"], "position");
+    assert_eq!(state["alive"], serde_json::Value::Bool(true));
+
+    std::thread::sleep(std::time::Duration::from_secs(20));
+    harness.ensure_connected();
+
+    let state = harness.observe();
+    let after_idle = vec2(&state["ship"], "position");
+    assert_eq!(start, after_idle, "server state must survive the idle gap");
+
+    assert!(
+        fly_to(&mut harness, [start[0] + 300.0, start[1]], 60.0, 200),
+        "ship must still respond after an idle gap"
+    );
+
+    let state = harness.observe();
+    assert_eq!(state["alive"], serde_json::Value::Bool(true));
+    let players = {
+        let mut query = harness.server.world_mut().query::<&ShipInfo>();
+        query
+            .iter(harness.server.world())
+            .filter(|info| info.owner == Some(EMBEDDED_CLIENT_ID as u64))
+            .count()
+    };
+    assert_eq!(players, 1, "reconnect must not spawn a duplicate player");
 }

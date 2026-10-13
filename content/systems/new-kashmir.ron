@@ -1,0 +1,20 @@
+(
+    id: "new-kashmir",
+    name: "New Kashmir",
+    government: "independent",
+    description: "Saffron fields under alien suns. The spice must flow.",
+    position: (-400.0, -2800.0),
+    links: ["sirius", "tarsis", "ross-154"],
+    planets: [
+        (
+            id: "kashmir-fields",
+            name: "The Fields",
+            description: "Terraced valleys of imported saffron. A planet that smells like money.",
+            commodities: [
+                (id: "food", price: 4),
+                (id: "luxury", price: 70),
+                (id: "medicine", price: 42),
+            ],
+        ),
+    ],
+)

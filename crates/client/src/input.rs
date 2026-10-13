@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use evr_data::ContentPack;
 use evr_protocol::{
-    BuyCommodity, DockedAt, PlanetTag, Position, RequestHyperjump, RequestLand, RequestLiftOff,
-    SellCommodity, SetFiring, SetThrottle, SetTurn, ShipInfo, SystemMembership,
+    BuyCommodity, DockedAt, PlanetTag, Position, RequestLand, RequestLiftOff, SellCommodity,
+    SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo, SystemMembership,
 };
 use evr_server::gameplay::LAND_RANGE;
 
@@ -89,14 +89,11 @@ fn poll_action_input(
         commands.client_trigger(RequestLiftOff);
     }
 
-    if docked.is_none()
-        && keys.just_pressed(KeyCode::KeyJ)
-        && let Some(current) = content.0.system(&membership.0)
-        && let Some(target) = current.links.first()
-    {
-        commands.client_trigger(RequestHyperjump {
-            target: target.clone(),
-        });
+    if keys.just_pressed(KeyCode::KeyJ) {
+        commands.client_trigger(SetWarp(true));
+    }
+    if keys.just_released(KeyCode::KeyJ) {
+        commands.client_trigger(SetWarp(false));
     }
 
     let Some(docked) = docked else {

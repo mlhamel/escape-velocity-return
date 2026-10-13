@@ -99,9 +99,7 @@ pub struct SellCommodity {
 }
 
 #[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RequestHyperjump {
-    pub target: String,
-}
+pub struct SetWarp(pub bool);
 
 #[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoginRequest {
@@ -150,7 +148,7 @@ pub fn register(app: &mut App) {
         .add_client_event::<RequestLiftOff>(Channel::Ordered)
         .add_client_event::<BuyCommodity>(Channel::Ordered)
         .add_client_event::<SellCommodity>(Channel::Ordered)
-        .add_client_event::<RequestHyperjump>(Channel::Ordered)
+        .add_client_event::<SetWarp>(Channel::Ordered)
         .add_client_event::<LoginRequest>(Channel::Ordered)
         .add_server_event::<LoginResponse>(Channel::Ordered)
         .add_server_event::<Notice>(Channel::Ordered)
@@ -204,9 +202,7 @@ mod tests {
             commodity: "food".into(),
             qty: 5,
         });
-        roundtrip(RequestHyperjump {
-            target: "alpha-centauri".into(),
-        });
+        roundtrip(SetWarp(true));
         roundtrip(LoginRequest {
             username: "alice".into(),
             password: "pass123".into(),
