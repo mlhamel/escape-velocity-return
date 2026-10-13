@@ -1,6 +1,6 @@
 # Shared Economy (MMO)
 
-[draft] — targets M3
+[draft] — targets M4
 
 All players trade in the same persistent market.
 

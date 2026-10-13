@@ -41,7 +41,7 @@ Agents: start at [AGENTS.md](AGENTS.md). Humans: start at
 
 The game is also playable by agents: `evr-mcp` exposes the sim as an MCP
 server (registered as `evr-game` in opencode.json) — observe, fly, trade,
-fight, and hyperjump through tool calls. See `crates/mcp`.
+fight, and warp through tool calls. See `crates/mcp`.
 
 ## Milestones
 
@@ -49,4 +49,5 @@ fight, and hyperjump through tool calls. See `crates/mcp`.
 - **M1** — offline vertical slice: fly, trade, fight, hyperjump ✅
 - **M2** — real networking: standalone server, 2+ players, per-system rooms, govt-zone PvP ✅
 - **M3** — persistence: accounts, login gate, SQLite player state ✅
+- **M3.5** — continuous galaxy: warp drive replaces hyperjump, 11-system shared plane, minimap, MCP auto-reconnect ✅
 - **M4** — community playtest: shared economy tick, faction meta-game, ops

@@ -10,7 +10,7 @@
 - Landing refuels at 1 cr per unit of fuel
 - Credits survive death; cargo does not
 
-## Shared economy (MMO) — M3
+## Shared economy (MMO) — M4
 
 - Prices respond to actual player trading: selling floods, buying drains
 - NPC freighters exploit stale routes, keeping spreads from being permanent
