@@ -3,3 +3,5 @@
 .director/
 *.log
 .DS_Store
+# runtime SQLite storage from `cargo run -p evr-server --storage path.db`
+*.db
