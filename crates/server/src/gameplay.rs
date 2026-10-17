@@ -601,7 +601,7 @@ type NpcShips<'w, 's> = Query<
 fn pirate_ai(
     mut commands: Commands,
     mut pirates: NpcShips,
-    players: Query<(Entity, &Position, &Owner), With<PlayerShip>>,
+    players: Query<(Entity, &Position, &Owner, Option<&DockedAt>), With<PlayerShip>>,
 ) {
     for (entity, position, heading, mut control, aggro) in &mut pirates {
         control.throttle = 0.0;
@@ -609,17 +609,27 @@ fn pirate_ai(
         control.firing = false;
 
         let target = match aggro {
-            Some(Aggro(wanted_owner)) => players
-                .iter()
-                .find(|(_, _, target_owner)| target_owner.0 == *wanted_owner),
-            None => players.iter().min_by_key(|(_, target_position, _)| {
-                position.0.distance(target_position.0).to_bits()
-            }),
-        };
-        let Some((_, target, _)) = target else {
-            if aggro.is_some() {
-                commands.entity(entity).despawn();
+            Some(Aggro(wanted_owner)) => {
+                let Some(entry) = players
+                    .iter()
+                    .find(|(_, _, target_owner, _)| target_owner.0 == *wanted_owner)
+                else {
+                    commands.entity(entity).despawn();
+                    continue;
+                };
+                if entry.3.is_some() {
+                    continue;
+                }
+                Some(entry)
             }
+            None => players
+                .iter()
+                .filter(|(_, _, _, docked)| docked.is_none())
+                .min_by_key(|(_, target_position, _, _)| {
+                    position.0.distance(target_position.0).to_bits()
+                }),
+        };
+        let Some((_, target, _, _)) = target else {
             continue;
         };
         let delta = target.0 - position.0;
@@ -700,7 +710,7 @@ fn projectile_hits(
     projectiles: Query<(Entity, &Position, &Projectile)>,
     aggros: Query<&Aggro>,
     ships: Query<(Entity, &ShipInfo, Option<&ClientRef>), With<Ship>>,
-    mut hittable: Query<(&mut Ship, &mut LastDamagedBy, Option<&mut Wallet>)>,
+    mut hittable: Query<(&mut Ship, &mut LastDamagedBy, Option<&mut Wallet>), Without<DockedAt>>,
 ) {
     let mut hits = Vec::new();
     for (projectile_entity, position, projectile) in &projectiles {
