@@ -1,0 +1,113 @@
+name: CI, Benchmark & Timestamped Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-and-bench:
+    name: Test, Benchmark & Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Bevy Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libx11-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libwayland-dev \
+            libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target directory
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run workspace tests
+        run: cargo test --workspace
+
+      - name: Run gameplay benchmarks (Markdown + JSON)
+        run: |
+          cargo build --release -p evr-mcp
+          ./target/release/evr-mcp --bench > bench-report.md
+          ./target/release/evr-mcp --bench --json > bench-report.json
+          cat bench-report.md
+
+      - name: Publish benchmark summary to GitHub Actions step summary
+        run: |
+          {
+            echo "## Gameplay Benchmark Report"
+            echo ""
+            cat bench-report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare timestamped release metadata and notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: release_meta
+        run: |
+          TIMESTAMP=$(date -u +"%Y%m%d-%H%M%S")
+          ISO_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          COMMIT_TITLE=$(git log -1 --pretty=%s)
+          TAG="build-${TIMESTAMP}-${SHORT_SHA}"
+          TITLE="Release ${TIMESTAMP} (${SHORT_SHA})"
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Escape Velocity: The Return — Automated Benchmark Release"
+            echo ""
+            echo "- **Timestamp:** \`${ISO_TIME}\`"
+            echo "- **Commit:** \`${GITHUB_SHA}\` (${COMMIT_TITLE})"
+            echo "- **Tag:** \`${TAG}\`"
+            echo ""
+            echo "### Gameplay Benchmark Report"
+            echo ""
+            cat bench-report.md
+            echo ""
+            echo "<details>"
+            echo "<summary>Raw JSON Benchmark Metrics (<code>bench-report.json</code>)</summary>"
+            echo ""
+            echo "\`\`\`json"
+            cat bench-report.json
+            echo "\`\`\`"
+            echo "</details>"
+          } > release-notes.md
+
+      - name: Create official GitHub Release with benchmark report
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          name: ${{ steps.release_meta.outputs.title }}
+          target_commitish: ${{ github.sha }}
+          body_path: release-notes.md
+          files: |
+            bench-report.md
+            bench-report.json
+          generate_release_notes: true
+          prerelease: false
+          make_latest: true
