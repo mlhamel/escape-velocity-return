@@ -97,6 +97,31 @@ def planet(buffer, base):
                 blend(buffer, x, y, color, alpha * 0.35)
 
 
+def chief(buffer, coat_color, accent_color):
+    # Framed portrait backdrop disc
+    fill_circle(buffer, SIZE * 0.5, SIZE * 0.52, SIZE * 0.44, (24, 30, 42, 255), 0)
+    # Shoulders / uniform coat
+    shoulders = [
+        (0.18, 0.92),
+        (0.24, 0.64),
+        (0.40, 0.56),
+        (0.60, 0.56),
+        (0.76, 0.64),
+        (0.82, 0.92),
+    ]
+    collar = [
+        (0.38, 0.56),
+        (0.50, 0.72),
+        (0.62, 0.56),
+    ]
+    fill_polygon(buffer, shoulders, coat_color + (255,))
+    fill_polygon(buffer, collar, accent_color + (255,))
+    # Head & visor/eyes
+    fill_circle(buffer, SIZE * 0.5, SIZE * 0.38, SIZE * 0.16, (215, 190, 168, 255), 0)
+    visor = [(0.38, 0.34), (0.62, 0.34), (0.60, 0.40), (0.40, 0.40)]
+    fill_polygon(buffer, visor, accent_color + (255,))
+
+
 def main():
     root = os.path.join(os.path.dirname(__file__), "..", "assets", "textures")
 
@@ -112,6 +137,14 @@ def main():
         planet_pixels = [0] * (SIZE * SIZE * 4)
         planet(planet_pixels, base)
         write_png(os.path.join(root, "planets", name), SIZE, SIZE, bytes(planet_pixels))
+
+    for name, coat, accent in [
+        ("earth.png", (48, 88, 150), (210, 175, 75)),
+        ("newhaven.png", (128, 92, 62), (90, 190, 175)),
+    ]:
+        chief_pixels = [0] * (SIZE * SIZE * 4)
+        chief(chief_pixels, coat, accent)
+        write_png(os.path.join(root, "chiefs", name), SIZE, SIZE, bytes(chief_pixels))
 
 
 if __name__ == "__main__":

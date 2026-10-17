@@ -2,8 +2,8 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use evr_protocol::{
-    AccountState, DockedAt, Fuel, Hull, Notice, PlanetTag, PlayerDied, Position, ShipInfo,
-    SystemMembership,
+    AccountState, ActiveQuests, ChiefEncounter, DockedAt, Fuel, Hull, Notice, PlanetTag,
+    PlayerDied, Position, QuestTarget, ShipInfo, SystemMembership,
 };
 use evr_server::gameplay::LAND_RANGE;
 
@@ -28,6 +28,7 @@ struct Noticeboard {
 struct HudLayout {
     system_line: Entity,
     stats_line: Entity,
+    quest_line: Entity,
     prompt_line: Entity,
     trade_block: Entity,
     notice_line: Entity,
@@ -53,6 +54,7 @@ impl Plugin for HudPlugin {
 struct HudEntities {
     system_line: Option<Entity>,
     stats_line: Option<Entity>,
+    quest_line: Option<Entity>,
     prompt_line: Option<Entity>,
     trade_block: Option<Entity>,
     notice_line: Option<Entity>,
@@ -136,6 +138,7 @@ fn spawn_hud(mut commands: Commands) {
             ids.shield_fill = Some(spawn_bar(root, "shield", Color::srgb(0.3, 0.8, 1.0)));
             ids.armor_fill = Some(spawn_bar(root, "armor", Color::srgb(0.95, 0.6, 0.3)));
             ids.fuel_fill = Some(spawn_bar(root, "fuel", Color::srgb(0.5, 0.9, 0.4)));
+            ids.quest_line = Some(spawn_text(root, "", 14.0, AMBER));
             ids.prompt_line = Some(spawn_text(root, "", 15.0, CYAN));
             ids.trade_block = Some(spawn_text(root, "", 15.0, VALUE));
         });
@@ -172,7 +175,7 @@ fn spawn_hud(mut commands: Commands) {
         .with_children(|parent| {
             spawn_text(
                 parent,
-                "W thrust   A/D turn   Space fire   L land   U lift   J jump",
+                "W thrust   A/D turn   Space fire   L land   U lift   J warp   T chief",
                 13.0,
                 DIM,
             );
@@ -181,6 +184,7 @@ fn spawn_hud(mut commands: Commands) {
     commands.insert_resource(HudLayout {
         system_line: ids.system_line.expect("hud entities must exist"),
         stats_line: ids.stats_line.expect("hud entities must exist"),
+        quest_line: ids.quest_line.expect("hud entities must exist"),
         prompt_line: ids.prompt_line.expect("hud entities must exist"),
         trade_block: ids.trade_block.expect("hud entities must exist"),
         notice_line: ids.notice_line.expect("hud entities must exist"),
@@ -212,6 +216,8 @@ type HudShips<'w, 's> = Query<
         &'static SystemMembership,
         &'static Position,
         Option<&'static DockedAt>,
+        Option<&'static ActiveQuests>,
+        Option<&'static ChiefEncounter>,
     ),
 >;
 
@@ -240,11 +246,13 @@ fn update_hud(
 ) {
     let my = ships
         .iter()
-        .find(|(info, _, _, _, _, _, _)| info.owner == Some(my_id.0));
+        .find(|(info, _, _, _, _, _, _, _, _)| info.owner == Some(my_id.0));
 
-    let Some((_, hull, fuel, account, membership, position, docked)) = my else {
+    let Some((_, hull, fuel, account, membership, position, docked, active_quests, encounter)) = my
+    else {
         set_text(&mut texts, layout.system_line, String::new());
         set_text(&mut texts, layout.stats_line, String::new());
+        set_text(&mut texts, layout.quest_line, String::new());
         set_text(&mut texts, layout.prompt_line, String::new());
         set_text(&mut texts, layout.trade_block, String::new());
         set_bar(&mut nodes, layout.shield_fill, 0.0);
@@ -283,6 +291,48 @@ fn update_hud(
     set_bar(&mut nodes, layout.armor_fill, hull.armor / hull.max_armor);
     set_bar(&mut nodes, layout.fuel_fill, fuel.current / fuel.max);
 
+    let mut quest_text = String::new();
+    if let Some(quests) = active_quests {
+        for q in &quests.quests {
+            let timer = q
+                .remaining_secs
+                .map(|s| format!(" [{}s]", s.ceil().max(0.0) as u32))
+                .unwrap_or_default();
+            let detail = match &q.target {
+                QuestTarget::Delivery {
+                    commodity,
+                    qty,
+                    destination_system,
+                    destination_planet,
+                } => format!(
+                    "contract: {} {} -> {} ({}){}",
+                    qty, commodity, destination_planet, destination_system, timer
+                ),
+                QuestTarget::Bounty {
+                    system,
+                    target,
+                    killed,
+                } => {
+                    if *killed {
+                        format!(
+                            "contract: return to {} (+{} cr)",
+                            q.giver_planet, q.reward_credits
+                        )
+                    } else {
+                        format!("contract: hunt {} in {}{}", target, system, timer)
+                    }
+                }
+            };
+            quest_text.push_str(&detail);
+            quest_text.push('\n');
+        }
+    }
+    set_text(
+        &mut texts,
+        layout.quest_line,
+        quest_text.trim_end().to_owned(),
+    );
+
     let mut prompts = Vec::new();
     let mut trade = String::new();
     if let Some(docked_at) = docked {
@@ -311,6 +361,9 @@ fn update_hud(
             }
         }
         prompts.push("U — lift off".to_owned());
+        if encounter.is_some() {
+            prompts.push("T — chief".to_owned());
+        }
     } else {
         let candidate = planets
             .iter()

@@ -8,6 +8,7 @@ pub struct Textures {
     pub ship: Handle<Image>,
     pub planet: Handle<Image>,
     pub glow: Handle<Image>,
+    pub chief: Handle<Image>,
 }
 
 pub(crate) fn create_textures(
@@ -18,6 +19,7 @@ pub(crate) fn create_textures(
     let ship = images.add(ship_image(96));
     let planet = images.add(planet_image(128));
     let glow = images.add(glow_image(64));
+    let chief = images.add(chief_image(128));
     for system in &content.0.systems {
         for accent in crate::sky_gen::nebula_accents(&system.id, 3) {
             let mut nebula = Sprite::from_image(glow.clone());
@@ -30,7 +32,28 @@ pub(crate) fn create_textures(
         }
     }
 
-    commands.insert_resource(Textures { ship, planet, glow });
+    commands.insert_resource(Textures {
+        ship,
+        planet,
+        glow,
+        chief,
+    });
+}
+
+fn chief_image(size: u32) -> Image {
+    let mut data = vec![0; (size * size * 4) as usize];
+    let shoulders = [
+        (0.18, 0.92),
+        (0.24, 0.64),
+        (0.40, 0.56),
+        (0.60, 0.56),
+        (0.76, 0.64),
+        (0.82, 0.92),
+    ];
+    fill_circle(&mut data, size, 0.5, 0.52, 0.44, 48, 255);
+    fill_polygon(&mut data, size, &shoulders, 180);
+    fill_circle(&mut data, size, 0.5, 0.38, 0.16, 225, 255);
+    image_from_rgba(size, data)
 }
 
 fn ship_image(size: u32) -> Image {

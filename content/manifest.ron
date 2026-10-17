@@ -23,4 +23,10 @@
     outfits: [
         "outfits/light-blaster.ron",
     ],
+    quests: [
+        "quests/newhaven-relief.ron",
+        "quests/sol-machinery-run.ron",
+        "quests/urgent-vega-vaccine.ron",
+        "quests/centauri-pirate-bounty.ron",
+    ],
 )

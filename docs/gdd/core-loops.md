@@ -11,8 +11,10 @@ prices. Money buys better ships and equipment.
 
 ## 2. Missions (tens of minutes)
 
-Offered in spaceport bars: delivery, escort, bounty hunting, espionage.
-Reputation with factions opens deeper story arcs.
+Offered by planet chiefs on docking (alongside resource offers and tribute
+demands): delivery, bounty hunting, and timed contracts (see
+[encounters.md](encounters.md)). Reputation with factions opens deeper story
+arcs.
 
 ## 3. Combat (seconds)
 

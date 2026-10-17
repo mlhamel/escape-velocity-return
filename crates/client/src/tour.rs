@@ -4,8 +4,9 @@ use bevy::math::Vec2;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use evr_protocol::{
-    BuyCommodity, DockedAt, Heading, PlanetTag, Position, RequestLand, SetFiring, SetThrottle,
-    SetTurn, SetWarp, ShipInfo, ShipKind, SystemMembership,
+    BuyCommodity, ChiefEncounter, DockedAt, Heading, PlanetTag, Position, RequestLand,
+    RespondToEncounter, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo, ShipKind,
+    SystemMembership,
 };
 
 use crate::MyNetworkId;
@@ -47,6 +48,7 @@ enum TourStage {
     Duel,
     ApproachNewhaven,
     Dock,
+    Chief,
     Flush,
     Done,
 }
@@ -69,6 +71,7 @@ type TourShips<'w, 's> = Query<
         &'static Heading,
         &'static SystemMembership,
         Option<&'static DockedAt>,
+        Option<&'static ChiefEncounter>,
     ),
 >;
 
@@ -80,9 +83,9 @@ fn run_tour(
     ships: TourShips,
     planets: Query<(&PlanetTag, &Position)>,
 ) {
-    let Some((_, position, heading, membership, docked)) = ships
+    let Some((_, position, heading, membership, docked, encounter)) = ships
         .iter()
-        .find(|(info, _, _, _, _)| info.owner == Some(my_id.0))
+        .find(|(info, _, _, _, _, _)| info.owner == Some(my_id.0))
     else {
         return;
     };
@@ -133,8 +136,8 @@ fn run_tour(
         TourStage::Duel => {
             let Some(pirate_position) = ships
                 .iter()
-                .find(|(info, _, _, _, _)| info.kind == ShipKind::Pirate)
-                .map(|(_, position, _, _, _)| position.0)
+                .find(|(info, _, _, _, _, _)| info.kind == ShipKind::Pirate)
+                .map(|(_, position, _, _, _, _)| position.0)
             else {
                 return;
             };
@@ -179,9 +182,23 @@ fn run_tour(
             }
         }
         TourStage::Dock => {
-            if docked.is_none() {
+            if docked.is_none() || encounter.is_none() {
                 return;
             }
+            if tour.ticks > 30 {
+                request_capture(
+                    &mut commands,
+                    format!("{CAPTURE_DIR}/04-chief-encounter.png"),
+                );
+                commands.client_trigger(RespondToEncounter {
+                    choice: "1".to_owned(),
+                });
+                tour.stage = TourStage::Chief;
+                tour.actioned = false;
+                tour.ticks = 0;
+            }
+        }
+        TourStage::Chief => {
             if !tour.actioned {
                 tour.actioned = true;
                 commands.client_trigger(BuyCommodity {

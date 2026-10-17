@@ -5,6 +5,10 @@ use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use rusqlite::{Connection, OptionalExtension, params};
 
+fn default_active_quests_json() -> String {
+    "[]".to_owned()
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlayerState {
     pub credits: u32,
@@ -15,6 +19,8 @@ pub struct PlayerState {
     pub fuel: f32,
     pub shields: f32,
     pub armor: f32,
+    #[serde(default = "default_active_quests_json")]
+    pub active_quests_json: String,
 }
 
 impl Default for PlayerState {
@@ -28,6 +34,7 @@ impl Default for PlayerState {
             fuel: 120.0,
             shields: 40.0,
             armor: 25.0,
+            active_quests_json: default_active_quests_json(),
         }
     }
 }
@@ -93,12 +100,28 @@ impl SqliteStorage {
                 pos_y REAL NOT NULL DEFAULT 0,
                 fuel REAL NOT NULL DEFAULT 120,
                 shields REAL NOT NULL DEFAULT 40,
-                armor REAL NOT NULL DEFAULT 25
+                armor REAL NOT NULL DEFAULT 25,
+                active_quests_json TEXT NOT NULL DEFAULT '[]'
             );",
         )?;
+        Self::migrate_columns(&conn)?;
         Ok(Self {
             conn: std::sync::Mutex::new(conn),
         })
+    }
+
+    fn migrate_columns(conn: &Connection) -> Result<(), StorageError> {
+        let mut stmt = conn.prepare("PRAGMA table_info(accounts)")?;
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !cols.iter().any(|c| c == "active_quests_json") {
+            conn.execute(
+                "ALTER TABLE accounts ADD COLUMN active_quests_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )?;
+        }
+        Ok(())
     }
 
     pub fn open_memory() -> Result<Self, StorageError> {
@@ -108,6 +131,9 @@ impl SqliteStorage {
     fn row_to_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerState> {
         let cargo_json: String = row.get("cargo_json")?;
         let cargo: Vec<(String, u32)> = serde_json::from_str(&cargo_json).unwrap_or_default();
+        let active_quests_json: String = row
+            .get("active_quests_json")
+            .unwrap_or_else(|_| default_active_quests_json());
         Ok(PlayerState {
             credits: row.get("credits")?,
             cargo,
@@ -117,12 +143,13 @@ impl SqliteStorage {
             fuel: row.get("fuel")?,
             shields: row.get("shields")?,
             armor: row.get("armor")?,
+            active_quests_json,
         })
     }
 }
 
 fn state_columns() -> &'static str {
-    "credits, cargo_json, ship_id, system, pos_x, pos_y, fuel, shields, armor"
+    "credits, cargo_json, ship_id, system, pos_x, pos_y, fuel, shields, armor, active_quests_json"
 }
 
 impl Storage for SqliteStorage {
@@ -135,8 +162,8 @@ impl Storage for SqliteStorage {
         let state = PlayerState::default();
         let cargo_json = serde_json::to_string(&state.cargo).unwrap_or_else(|_| "[]".into());
         self.conn.lock().unwrap().execute(
-            "INSERT INTO accounts (username, password_hash, credits, cargo_json, ship_id, system, pos_x, pos_y, fuel, shields, armor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO accounts (username, password_hash, credits, cargo_json, ship_id, system, pos_x, pos_y, fuel, shields, armor, active_quests_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 username,
                 hash,
@@ -149,6 +176,7 @@ impl Storage for SqliteStorage {
                 state.fuel,
                 state.shields,
                 state.armor,
+                state.active_quests_json,
             ],
         )?;
         Ok(state)
@@ -199,7 +227,7 @@ impl Storage for SqliteStorage {
     fn save_player(&self, username: &str, state: &PlayerState) -> Result<(), StorageError> {
         let cargo_json = serde_json::to_string(&state.cargo).unwrap_or_else(|_| "[]".into());
         self.conn.lock().unwrap().execute(
-            "UPDATE accounts SET credits=?2, cargo_json=?3, ship_id=?4, system=?5, pos_x=?6, pos_y=?7, fuel=?8, shields=?9, armor=?10
+            "UPDATE accounts SET credits=?2, cargo_json=?3, ship_id=?4, system=?5, pos_x=?6, pos_y=?7, fuel=?8, shields=?9, armor=?10, active_quests_json=?11
              WHERE username=?1",
             params![
                 username,
@@ -212,6 +240,7 @@ impl Storage for SqliteStorage {
                 state.fuel,
                 state.shields,
                 state.armor,
+                state.active_quests_json,
             ],
         )?;
         Ok(())
@@ -229,6 +258,7 @@ mod tests {
         let storage = SqliteStorage::open_memory().expect("open");
         let state = storage.create_account("alice", "pass123").expect("create");
         assert_eq!(state.credits, 500);
+        assert_eq!(state.active_quests_json, "[]");
 
         let loaded = storage
             .verify_login("alice", "pass123")
@@ -260,6 +290,7 @@ mod tests {
             fuel: 95.0,
             shields: 30.0,
             armor: 20.0,
+            active_quests_json: r#"{"quests":[],"completed":["newhaven-relief"]}"#.to_owned(),
         };
         storage.save_player("carol", &state).expect("save");
 
@@ -272,6 +303,7 @@ mod tests {
         assert_eq!(loaded.ship_id, "turncoat");
         assert_eq!(loaded.system, "alpha-centauri");
         assert_eq!(loaded.position, (200.0, 300.0));
+        assert_eq!(loaded.active_quests_json, state.active_quests_json);
 
         state.credits = 500;
         storage.save_player("carol", &state).expect("save2");
@@ -280,5 +312,39 @@ mod tests {
             .expect("verify")
             .expect("found");
         assert_eq!(reloaded.credits, 500);
+    }
+
+    #[test]
+    fn legacy_schema_migrates_active_quests_column() {
+        let path = std::env::temp_dir().join(format!(
+            "evr-storage-migrate-test-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).expect("open legacy db");
+            conn.execute_batch(
+                "CREATE TABLE accounts (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    credits INTEGER NOT NULL DEFAULT 500,
+                    cargo_json TEXT NOT NULL DEFAULT '[]',
+                    ship_id TEXT NOT NULL DEFAULT 'shuttle',
+                    system TEXT NOT NULL DEFAULT 'sol',
+                    pos_x REAL NOT NULL DEFAULT 0,
+                    pos_y REAL NOT NULL DEFAULT 0,
+                    fuel REAL NOT NULL DEFAULT 120,
+                    shields REAL NOT NULL DEFAULT 40,
+                    armor REAL NOT NULL DEFAULT 25
+                );",
+            )
+            .expect("create legacy table");
+        }
+        let storage = SqliteStorage::open(&path).expect("open with migration");
+        let created = storage
+            .create_account("legacy_user", "pw")
+            .expect("create after migration");
+        assert_eq!(created.active_quests_json, "[]");
+        let _ = std::fs::remove_file(&path);
     }
 }

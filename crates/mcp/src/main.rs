@@ -52,6 +52,12 @@ struct WarpArgs {
     on: bool,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RespondArgs {
+    /// Encounter option id (e.g. "accept_quest", "turn_in", "accept_offer", "pay_tribute", "decline") or 1-based option number ("1", "2")
+    choice: String,
+}
+
 enum Command {
     Advance(u32),
     Observe,
@@ -70,6 +76,7 @@ enum Command {
     SetWarp {
         on: bool,
     },
+    Respond(String),
 }
 
 #[derive(Clone)]
@@ -103,7 +110,7 @@ impl GameMcp {
     }
 
     #[tool(
-        description = "Observe the full authoritative game state as JSON: ship, planets, ships, market, notices."
+        description = "Observe the full authoritative game state as JSON: ship, planets, ships, market, encounter, quests, notices."
     )]
     async fn observe(&self) -> String {
         self.call(Command::Observe).await
@@ -176,6 +183,13 @@ impl GameMcp {
     async fn warp(&self, Parameters(args): Parameters<WarpArgs>) -> String {
         self.call(Command::SetWarp { on: args.on }).await
     }
+
+    #[tool(
+        description = "Respond to a planet chief encounter while docked (see observe.encounter.options). Returns the updated state."
+    )]
+    async fn respond(&self, Parameters(RespondArgs { choice }): Parameters<RespondArgs>) -> String {
+        self.call(Command::Respond(choice)).await
+    }
 }
 
 fn game_thread(content_root: PathBuf, mut rx: mpsc::Receiver<(Command, oneshot::Sender<String>)>) {
@@ -222,6 +236,11 @@ fn game_thread(content_root: PathBuf, mut rx: mpsc::Receiver<(Command, oneshot::
             }
             Command::SetWarp { on } => {
                 harness.set_warp(on);
+                harness.advance(SETTLE_TICKS);
+                json(&harness.observe())
+            }
+            Command::Respond(choice) => {
+                harness.respond(&choice);
                 harness.advance(SETTLE_TICKS);
                 json(&harness.observe())
             }

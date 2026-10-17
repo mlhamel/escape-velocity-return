@@ -11,6 +11,14 @@
             name: "Newhaven",
             description: "A mining town with a docking ring. The magistrate collects taxes in ore and looks the other way for a little extra.",
             sprite: Some("textures/planets/newhaven.png"),
+            chief: Some((
+                name: "Magistrate Kael",
+                portrait: Some("textures/chiefs/newhaven.png"),
+                greeting: "Welcome to Newhaven. The air is recycled, the ore is real, and my clerks count every bolt on your hull twice.",
+                offer_text: "One of the ridge crews paid their quarterly lease in raw stock instead of scrip. If you have room in the hold, take a cut before it rusts on the apron.",
+                tribute_text: "Ring maintenance doesn't fund itself, captain. Leave a contribution for the docking seals and nobody asks what you're hauling under the deck plates.",
+                quest_text: "Since your drives are still warm, I have a problem that needs carrying across the black.",
+            )),
             commodities: [
                 (id: "food", price: 14),
                 (id: "machinery", price: 30),

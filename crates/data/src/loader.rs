@@ -6,6 +6,7 @@ use serde::de::DeserializeOwned;
 use crate::error::{ContentError, validate_asset, validate_ids, validate_reference};
 use crate::manifest::Manifest;
 use crate::outfit::OutfitDef;
+use crate::quest::{QuestDef, QuestKind};
 use crate::ship::ShipDef;
 use crate::system::SystemDef;
 
@@ -15,6 +16,7 @@ pub struct ContentPack {
     pub ships: Vec<ShipDef>,
     pub systems: Vec<SystemDef>,
     pub outfits: Vec<OutfitDef>,
+    pub quests: Vec<QuestDef>,
 }
 
 impl ContentPack {
@@ -36,7 +38,12 @@ impl ContentPack {
             outfits.push(parse_ron(&root.join(path))?);
         }
 
-        Self::validate(&ships, &systems, &outfits)?;
+        let mut quests: Vec<QuestDef> = Vec::with_capacity(manifest.quests.len());
+        for path in &manifest.quests {
+            quests.push(parse_ron(&root.join(path))?);
+        }
+
+        Self::validate(&ships, &systems, &outfits, &quests)?;
         Self::validate_sprites(root, &ships, &systems)?;
 
         Ok(Self {
@@ -44,6 +51,7 @@ impl ContentPack {
             ships,
             systems,
             outfits,
+            quests,
         })
     }
 
@@ -63,6 +71,11 @@ impl ContentPack {
                 if let Some(sprite) = &planet.sprite {
                     validate_asset(&assets_root, sprite)?;
                 }
+                if let Some(chief) = &planet.chief
+                    && let Some(portrait) = &chief.portrait
+                {
+                    validate_asset(&assets_root, portrait)?;
+                }
             }
         }
         Ok(())
@@ -80,14 +93,20 @@ impl ContentPack {
         self.outfits.iter().find(|outfit| outfit.id == id)
     }
 
+    pub fn quest(&self, id: &str) -> Option<&QuestDef> {
+        self.quests.iter().find(|quest| quest.id == id)
+    }
+
     fn validate(
         ships: &[ShipDef],
         systems: &[SystemDef],
         outfits: &[OutfitDef],
+        quests: &[QuestDef],
     ) -> Result<(), ContentError> {
         validate_ids("ship", ships.iter().map(|ship| ship.id.clone()))?;
         validate_ids("system", systems.iter().map(|system| system.id.clone()))?;
         validate_ids("outfit", outfits.iter().map(|outfit| outfit.id.clone()))?;
+        validate_ids("quest", quests.iter().map(|quest| quest.id.clone()))?;
 
         let outfit_ids: std::collections::HashSet<_> =
             outfits.iter().map(|o| o.id.clone()).collect();
@@ -111,6 +130,25 @@ impl ContentPack {
                         kind: "reciprocal link",
                         id: format!("{}->{}", system.id, link),
                     });
+                }
+            }
+        }
+
+        let planet_refs: std::collections::HashSet<String> = systems
+            .iter()
+            .flat_map(|s| s.planets.iter().map(move |p| format!("{}/{}", s.id, p.id)))
+            .collect();
+
+        for quest in quests {
+            let giver_ref = format!("{}/{}", quest.giver.0, quest.giver.1);
+            validate_reference("quest giver planet", &giver_ref, &planet_refs)?;
+            match &quest.kind {
+                QuestKind::Delivery { destination, .. } => {
+                    let dest_ref = format!("{}/{}", destination.0, destination.1);
+                    validate_reference("quest destination planet", &dest_ref, &planet_refs)?;
+                }
+                QuestKind::Bounty { system, .. } => {
+                    validate_reference("quest target system", system, &system_ids)?;
                 }
             }
         }

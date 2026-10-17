@@ -11,6 +11,14 @@
             name: "Earth",
             description: "Cradle of humanity and seat of the Confederation. The sky bazaars sell everything except patience.",
             sprite: Some("textures/planets/earth.png"),
+            chief: Some((
+                name: "Port Director Lin",
+                portrait: Some("textures/chiefs/earth.png"),
+                greeting: "Berth seventeen. Keep your thrusters cold and your manifest colder. I have twelve freighters stacked past Luna and three minutes before my coffee dies.",
+                offer_text: "A sub-contractor defaulted on his orbital storage fees. Take this surplus off my ledger at half tariff before the auditors arrive.",
+                tribute_text: "Congestion surcharge, debris-abatement levy, and the Tuesday docking assessment. Pay the clerk on your way out or we flag your transponder.",
+                quest_text: "If your hold isn't spoken for, the Directorate has a contract that needs a hull with fewer markings than a patrol cutter.",
+            )),
             commodities: [
                 (id: "food", price: 8),
                 (id: "machinery", price: 45),

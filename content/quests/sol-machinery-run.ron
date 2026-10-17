@@ -1,0 +1,12 @@
+(
+    id: "sol-machinery-run",
+    name: "Refinery Spindles to Earth",
+    giver: ("alpha-centauri", "newhaven"),
+    kind: Delivery(
+        commodity: "machinery",
+        qty: 5,
+        destination: ("sol", "earth"),
+    ),
+    reward_credits: 400,
+    description: "Earth's orbital yards ordered five tons of calibrated drill spindles three months ago. Drop them on Port Director Lin's dock before she sends another notarized threat.",
+)

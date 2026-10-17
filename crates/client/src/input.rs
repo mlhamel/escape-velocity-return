@@ -2,18 +2,21 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use evr_data::ContentPack;
 use evr_protocol::{
-    BuyCommodity, DockedAt, PlanetTag, Position, RequestLand, RequestLiftOff, SellCommodity,
-    SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo, SystemMembership,
+    BuyCommodity, ChiefEncounter, DockedAt, PlanetTag, Position, RequestLand, RequestLiftOff,
+    RespondToEncounter, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo,
+    SystemMembership,
 };
 use evr_server::gameplay::LAND_RANGE;
 
 use crate::MyNetworkId;
+use crate::chief::ChiefPanelState;
 
 #[derive(Resource, Default)]
 struct InputState {
     throttle: bool,
     turn: i32,
     firing: bool,
+    warp: bool,
 }
 
 #[derive(Resource)]
@@ -53,19 +56,41 @@ fn poll_flight_input(
         state.firing = firing;
         commands.client_trigger(SetFiring(firing));
     }
+
+    let warp = keys.pressed(KeyCode::KeyJ);
+    if warp != state.warp {
+        state.warp = warp;
+        commands.client_trigger(SetWarp(warp));
+    }
 }
 
+const DIGIT_KEYS: [KeyCode; 5] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+];
+
+#[allow(clippy::type_complexity)]
 fn poll_action_input(
     my_id: Res<MyNetworkId>,
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     content: Res<ClientContent>,
-    ships: Query<(&ShipInfo, &Position, &SystemMembership, Option<&DockedAt>)>,
+    chief_panel: Option<Res<ChiefPanelState>>,
+    ships: Query<(
+        &ShipInfo,
+        &Position,
+        &SystemMembership,
+        Option<&DockedAt>,
+        Option<&ChiefEncounter>,
+    )>,
     planets: Query<(&PlanetTag, &Position)>,
 ) {
-    let Some((_, position, membership, docked)) = ships
+    let Some((_, position, membership, docked, encounter)) = ships
         .iter()
-        .find(|(info, _, _, _)| info.owner == Some(my_id.0))
+        .find(|(info, _, _, _, _)| info.owner == Some(my_id.0))
     else {
         return;
     };
@@ -89,16 +114,25 @@ fn poll_action_input(
         commands.client_trigger(RequestLiftOff);
     }
 
-    if keys.just_pressed(KeyCode::KeyJ) {
-        commands.client_trigger(SetWarp(true));
-    }
-    if keys.just_released(KeyCode::KeyJ) {
-        commands.client_trigger(SetWarp(false));
-    }
-
     let Some(docked) = docked else {
         return;
     };
+
+    let panel_open = chief_panel.is_some_and(|s| s.visible) && encounter.is_some();
+    if panel_open && let Some(enc) = encounter {
+        for (index, option) in enc.options.iter().enumerate() {
+            if let Some(&digit) = DIGIT_KEYS.get(index)
+                && keys.just_pressed(digit)
+            {
+                commands.client_trigger(RespondToEncounter {
+                    choice: option.id.clone(),
+                });
+                return;
+            }
+        }
+        return;
+    }
+
     let Some(system) = content.0.system(&docked.system) else {
         return;
     };
@@ -106,11 +140,8 @@ fn poll_action_input(
         return;
     };
     for (index, commodity) in planet.commodities.iter().enumerate() {
-        let digit = match index {
-            0 => KeyCode::Digit1,
-            1 => KeyCode::Digit2,
-            2 => KeyCode::Digit3,
-            _ => continue,
+        let Some(&digit) = DIGIT_KEYS.get(index) else {
+            continue;
         };
         if keys.just_pressed(digit) {
             let selling = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);

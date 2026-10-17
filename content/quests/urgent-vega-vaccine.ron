@@ -1,0 +1,13 @@
+(
+    id: "urgent-vega-vaccine",
+    name: "Cold-Chain Run to Vega",
+    giver: ("sol", "earth"),
+    kind: Delivery(
+        commodity: "medicine",
+        qty: 3,
+        destination: ("vega", "vega-station"),
+        deadline_secs: Some(180),
+    ),
+    reward_credits: 650,
+    description: "Three tons of live cultures bound for Vega Station. The coolant packs hold for three minutes; after that you're hauling expensive soup.",
+)

@@ -23,6 +23,7 @@ the names and sizes, and the game picks them up automatically.
 |---|---|---|---|
 | Ship | `assets/textures/ships/<ship-id>.png` | 128×128 | **Faces +x (east).** Draw in light/white — ships are tinted per faction (player cyan, pirate red) |
 | Planet | `assets/textures/planets/<planet-id>.png` | 128×128 | Natural colors; no tint applied |
+| Chief | `assets/textures/chiefs/<planet-id>.png` | 128×128 | Bust portrait on dark/transparent background; displayed in the docking encounter panel |
 
 - RGBA PNG, transparent background
 - Ship sprites render at ~30 px world size; planets at `radius * 2`

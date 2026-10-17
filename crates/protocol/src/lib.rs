@@ -69,6 +69,63 @@ pub struct AccountState {
     pub cargo_capacity: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChiefMood {
+    Offer,
+    Tribute,
+    Quest,
+    TurnIn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncounterOption {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChiefEncounter {
+    pub chief_name: String,
+    pub portrait: Option<String>,
+    pub mood: ChiefMood,
+    pub text: String,
+    pub options: Vec<EncounterOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum QuestTarget {
+    Delivery {
+        commodity: String,
+        qty: u32,
+        destination_system: String,
+        destination_planet: String,
+    },
+    Bounty {
+        system: String,
+        target: String,
+        killed: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveQuest {
+    pub id: String,
+    pub name: String,
+    pub giver_system: String,
+    pub giver_planet: String,
+    pub target: QuestTarget,
+    pub reward_credits: u32,
+    pub remaining_secs: Option<f32>,
+}
+
+#[derive(Component, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ActiveQuests {
+    #[serde(default)]
+    pub quests: Vec<ActiveQuest>,
+    #[serde(default)]
+    pub completed: Vec<String>,
+}
+
 #[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetThrottle(pub f32);
 
@@ -100,6 +157,11 @@ pub struct SellCommodity {
 
 #[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetWarp(pub bool);
+
+#[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RespondToEncounter {
+    pub choice: String,
+}
 
 #[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoginRequest {
@@ -141,6 +203,8 @@ pub fn register(app: &mut App) {
         .replicate::<SystemMembership>()
         .replicate::<DockedAt>()
         .replicate::<AccountState>()
+        .replicate::<ChiefEncounter>()
+        .replicate::<ActiveQuests>()
         .add_client_event::<SetThrottle>(Channel::Ordered)
         .add_client_event::<SetTurn>(Channel::Ordered)
         .add_client_event::<SetFiring>(Channel::Ordered)
@@ -149,6 +213,7 @@ pub fn register(app: &mut App) {
         .add_client_event::<BuyCommodity>(Channel::Ordered)
         .add_client_event::<SellCommodity>(Channel::Ordered)
         .add_client_event::<SetWarp>(Channel::Ordered)
+        .add_client_event::<RespondToEncounter>(Channel::Ordered)
         .add_client_event::<LoginRequest>(Channel::Ordered)
         .add_server_event::<LoginResponse>(Channel::Ordered)
         .add_server_event::<Notice>(Channel::Ordered)
@@ -188,6 +253,33 @@ mod tests {
             cargo: vec![("food".into(), 3)],
             cargo_capacity: 20,
         });
+        roundtrip(ChiefEncounter {
+            chief_name: "Port Director Lin".into(),
+            portrait: Some("textures/chiefs/earth.png".into()),
+            mood: ChiefMood::Quest,
+            text: "Take this contract.".into(),
+            options: vec![EncounterOption {
+                id: "accept_quest".into(),
+                label: "Accept".into(),
+            }],
+        });
+        roundtrip(ActiveQuests {
+            quests: vec![ActiveQuest {
+                id: "newhaven-relief".into(),
+                name: "Sealed Med-Crates for Newhaven".into(),
+                giver_system: "sol".into(),
+                giver_planet: "earth".into(),
+                target: QuestTarget::Delivery {
+                    commodity: "medicine".into(),
+                    qty: 4,
+                    destination_system: "alpha-centauri".into(),
+                    destination_planet: "newhaven".into(),
+                },
+                reward_credits: 450,
+                remaining_secs: Some(120.0),
+            }],
+            completed: vec!["old-quest".into()],
+        });
     }
 
     #[test]
@@ -203,6 +295,9 @@ mod tests {
             qty: 5,
         });
         roundtrip(SetWarp(true));
+        roundtrip(RespondToEncounter {
+            choice: "accept_quest".into(),
+        });
         roundtrip(LoginRequest {
             username: "alice".into(),
             password: "pass123".into(),

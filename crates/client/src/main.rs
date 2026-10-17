@@ -1,3 +1,4 @@
+mod chief;
 mod hud;
 mod input;
 mod minimap;
@@ -85,6 +86,7 @@ fn main() {
         visuals::VisualsPlugin,
         input::InputPlugin,
         hud::HudPlugin,
+        chief::ChiefPlugin,
         screenshots::ScreenshotPlugin,
         minimap::MinimapPlugin,
         sky::SkyPlugin,

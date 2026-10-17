@@ -177,3 +177,87 @@ fn harness_survives_idle_gap() {
     };
     assert_eq!(players, 1, "reconnect must not spawn a duplicate player");
 }
+
+#[test]
+fn quest_loop_playthrough() {
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let mut harness = Harness::new(&content);
+    harness.advance(20);
+
+    let state = harness.observe();
+    let earth = state["planets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "earth")
+        .expect("earth visible")
+        .clone();
+    let earth_pos = vec2(&earth, "position");
+
+    assert!(
+        fly_to(&mut harness, earth_pos, 280.0, 600),
+        "must reach earth"
+    );
+
+    harness.land("earth");
+    harness.advance(20);
+    let state = harness.observe();
+    assert_eq!(state["docked"], "earth");
+    assert_eq!(state["encounter"]["chief_name"], "Port Director Lin");
+    assert_eq!(state["encounter"]["mood"], "quest");
+
+    harness.respond("accept_quest");
+    harness.advance(15);
+    let state = harness.observe();
+    assert_eq!(state["encounter"], Value::Null);
+    assert_eq!(state["quests"].as_array().unwrap().len(), 1);
+    assert_eq!(state["quests"][0]["id"], "newhaven-relief");
+    assert_eq!(state["ship"]["cargo"]["medicine"], 4);
+
+    harness.lift_off();
+    harness.advance(10);
+
+    harness.set_warp(true);
+    assert!(
+        fly_to(&mut harness, [1250.0, 0.0], 60.0, 600),
+        "must reach alpha centauri space"
+    );
+    harness.set_flight(0.0, 0.0, false);
+    harness.set_warp(false);
+    harness.advance(10);
+
+    let state = harness.observe();
+    let newhaven = state["planets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "newhaven")
+        .expect("newhaven visible")
+        .clone();
+    let newhaven_pos = vec2(&newhaven, "position");
+    harness.set_warp(true);
+    assert!(
+        fly_to(&mut harness, newhaven_pos, 250.0, 600),
+        "must reach newhaven"
+    );
+    harness.set_flight(0.0, 0.0, false);
+    harness.set_warp(false);
+    harness.land("newhaven");
+    harness.advance(20);
+
+    let state = harness.observe();
+    assert_eq!(state["docked"], "newhaven");
+    assert_eq!(state["encounter"]["chief_name"], "Magistrate Kael");
+    assert_eq!(state["encounter"]["mood"], "turn_in");
+    let credits_before = state["ship"]["credits"].as_u64().unwrap();
+
+    harness.respond("turn_in");
+    harness.advance(15);
+    let state = harness.observe();
+    assert_eq!(state["encounter"], Value::Null);
+    assert!(state["quests"].as_array().unwrap().is_empty());
+    assert_eq!(
+        state["ship"]["credits"].as_u64().unwrap(),
+        credits_before + 450
+    );
+}

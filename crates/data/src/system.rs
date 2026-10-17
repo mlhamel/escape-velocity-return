@@ -18,7 +18,20 @@ pub struct PlanetDef {
     pub description: String,
     #[serde(default)]
     pub sprite: Option<String>,
+    #[serde(default)]
+    pub chief: Option<ChiefDef>,
     pub commodities: Vec<CommodityPrice>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChiefDef {
+    pub name: String,
+    #[serde(default)]
+    pub portrait: Option<String>,
+    pub greeting: String,
+    pub offer_text: String,
+    pub tribute_text: String,
+    pub quest_text: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,0 +1,12 @@
+(
+    id: "newhaven-relief",
+    name: "Sealed Med-Crates for Newhaven",
+    giver: ("sol", "earth"),
+    kind: Delivery(
+        commodity: "medicine",
+        qty: 4,
+        destination: ("alpha-centauri", "newhaven"),
+    ),
+    reward_credits: 450,
+    description: "Newhaven's ring clinic is down to veterinary analgesics and prayer. Deliver four tons of sealed medicine to Magistrate Kael and collect the Directorate's voucher on arrival.",
+)

@@ -1,0 +1,11 @@
+(
+    id: "centauri-pirate-bounty",
+    name: "Clear the Centauri Approach",
+    giver: ("alpha-centauri", "newhaven"),
+    kind: Bounty(
+        system: "alpha-centauri",
+        target: "turncoat",
+    ),
+    reward_credits: 600,
+    description: "A Turncoat raider has been shaking down ore barges outside the ring shadow. Vaporize one in Alpha Centauri space and bring me the telemetry log.",
+)

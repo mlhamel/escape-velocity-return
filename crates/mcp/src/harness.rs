@@ -11,9 +11,10 @@ use bevy_replicon_renet2::netcode::{
 use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetClient, RenetServer};
 use bevy_replicon_renet2::{RenetChannelsExt, RepliconRenetPlugins};
 use evr_protocol::{
-    AccountState, BuyCommodity, DockedAt, Hull, Notice, PlanetTag, PlayerDied, Position,
-    Projectile, RequestLand, RequestLiftOff, SellCommodity, SetFiring, SetThrottle, SetTurn,
-    SetWarp, ShipInfo, ShipKind, SystemMembership,
+    AccountState, ActiveQuests, BuyCommodity, ChiefEncounter, ChiefMood, DockedAt, Hull, Notice,
+    PlanetTag, PlayerDied, Position, Projectile, QuestTarget, RequestLand, RequestLiftOff,
+    RespondToEncounter, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo,
+    ShipKind, SystemMembership,
 };
 use evr_server::{
     Content, EMBEDDED_CLIENT_ID, TickMode, attach_memory, build_server_app,
@@ -209,6 +210,12 @@ impl Harness {
         self.client.world_mut().client_trigger(SetWarp(on));
     }
 
+    pub fn respond(&mut self, choice: &str) {
+        self.client.world_mut().client_trigger(RespondToEncounter {
+            choice: choice.to_owned(),
+        });
+    }
+
     pub fn observe(&mut self) -> serde_json::Value {
         let mut notices = Vec::new();
         if let Some(log) = self.client.world().get_resource::<NoticeLog>() {
@@ -228,23 +235,29 @@ impl Harness {
                 &SystemMembership,
                 Option<&DockedAt>,
                 Option<&AccountState>,
+                Option<&ChiefEncounter>,
+                Option<&ActiveQuests>,
             )>();
             let world = self.server.world();
             state
                 .iter(world)
-                .find(|(info, _, _, _, _)| info.owner == Some(owner))
-                .map(|(info, ship, membership, docked, account)| {
-                    (
-                        info.name.clone(),
-                        ship.0.clone(),
-                        membership.0.clone(),
-                        docked.map(|d| (d.system.clone(), d.planet.clone())),
-                        account.cloned(),
-                    )
-                })
+                .find(|(info, _, _, _, _, _, _)| info.owner == Some(owner))
+                .map(
+                    |(info, ship, membership, docked, account, encounter, quests)| {
+                        (
+                            info.name.clone(),
+                            ship.0.clone(),
+                            membership.0.clone(),
+                            docked.map(|d| (d.system.clone(), d.planet.clone())),
+                            account.cloned(),
+                            encounter.cloned(),
+                            quests.cloned(),
+                        )
+                    },
+                )
         };
 
-        let Some((ship_name, ship, system, docked, account)) = my_ship else {
+        let Some((ship_name, ship, system, docked, account, encounter, quests)) = my_ship else {
             return serde_json::json!({
                 "tick": self.ticks,
                 "alive": false,
@@ -266,6 +279,70 @@ impl Harness {
                     .commodities
                     .iter()
                     .map(|c| serde_json::json!({ "id": c.id, "price": c.price }))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let encounter_json = encounter.map(|enc| {
+            let mood = match enc.mood {
+                ChiefMood::Offer => "offer",
+                ChiefMood::Tribute => "tribute",
+                ChiefMood::Quest => "quest",
+                ChiefMood::TurnIn => "turn_in",
+            };
+            let options = enc
+                .options
+                .iter()
+                .map(|o| serde_json::json!({ "id": o.id, "label": o.label }))
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "chief_name": enc.chief_name,
+                "portrait": enc.portrait,
+                "mood": mood,
+                "text": enc.text,
+                "options": options,
+            })
+        });
+
+        let quests_json = quests
+            .map(|aq| {
+                aq.quests
+                    .iter()
+                    .map(|q| {
+                        let target = match &q.target {
+                            QuestTarget::Delivery {
+                                commodity,
+                                qty,
+                                destination_system,
+                                destination_planet,
+                            } => serde_json::json!({
+                                "kind": "delivery",
+                                "commodity": commodity,
+                                "qty": qty,
+                                "destination_system": destination_system,
+                                "destination_planet": destination_planet,
+                            }),
+                            QuestTarget::Bounty {
+                                system,
+                                target,
+                                killed,
+                            } => serde_json::json!({
+                                "kind": "bounty",
+                                "system": system,
+                                "target": target,
+                                "killed": killed,
+                            }),
+                        };
+                        serde_json::json!({
+                            "id": q.id,
+                            "name": q.name,
+                            "giver_system": q.giver_system,
+                            "giver_planet": q.giver_planet,
+                            "target": target,
+                            "reward_credits": q.reward_credits,
+                            "remaining_secs": q.remaining_secs,
+                        })
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -344,6 +421,8 @@ impl Harness {
             "planets": planets,
             "ships": ships,
             "market": market,
+            "encounter": encounter_json,
+            "quests": quests_json,
             "projectiles": projectile_count,
             "notices": notices,
         })

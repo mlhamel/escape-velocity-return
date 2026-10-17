@@ -5,12 +5,13 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon::shared::backend::connected_client::NetworkId;
 use evr_core::{Account, FlightModel, ShipState, WeaponState};
-use evr_data::{ContentPack, OutfitKind, WeaponDef};
+use evr_data::{ContentPack, OutfitKind, QuestDef, QuestKind, WeaponDef};
 use evr_protocol::{
-    AccountState, BuyCommodity, DockedAt, Explosion, Fuel, Heading, Hull, LoginRequest,
-    LoginResponse, Notice, PlanetTag, PlayerDied, Position, Projectile, RequestLand,
-    RequestLiftOff, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo, ShipKind,
-    SystemMembership,
+    AccountState, ActiveQuest, ActiveQuests, BuyCommodity, ChiefEncounter, ChiefMood, DockedAt,
+    EncounterOption, Explosion, Fuel, Heading, Hull, LoginRequest, LoginResponse, Notice,
+    PlanetTag, PlayerDied, Position, Projectile, QuestTarget, RequestLand, RequestLiftOff,
+    RespondToEncounter, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo,
+    ShipKind, SystemMembership,
 };
 
 use crate::Content;
@@ -38,6 +39,78 @@ pub const SYSTEM_MEMBERSHIP_RADIUS: f32 = 800.0;
 pub const FUEL_PRICE_PER_UNIT: f32 = 1.0;
 pub const WARP_SPEED_MULTIPLIER: f32 = 3.0;
 pub const WARP_FUEL_RATE: f32 = 8.0;
+pub const DEFAULT_ENCOUNTER_SEED: u64 = 0;
+pub const TRIBUTE_CREDITS: u32 = 50;
+pub const OFFER_QTY: u32 = 3;
+
+#[derive(Resource, Debug, Clone)]
+pub struct EncounterRng(pub u64);
+
+impl Default for EncounterRng {
+    fn default() -> Self {
+        Self(DEFAULT_ENCOUNTER_SEED)
+    }
+}
+
+impl EncounterRng {
+    pub fn with_roll(first_roll: u32) -> Self {
+        Self(u64::from(first_roll) << 32)
+    }
+
+    pub fn next_u32(&mut self, bound: u32) -> u32 {
+        let sample = self.0 >> 32;
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        if bound == 0 {
+            0
+        } else {
+            (sample % u64::from(bound)) as u32
+        }
+    }
+}
+
+#[derive(Component, Debug, Clone)]
+enum PendingEncounter {
+    Offer {
+        chief_name: String,
+        commodity: String,
+        qty: u32,
+        cost: u32,
+    },
+    Tribute {
+        chief_name: String,
+        amount: u32,
+    },
+    Quest {
+        chief_name: String,
+        quest_id: String,
+    },
+    TurnIn {
+        quest_id: String,
+    },
+}
+
+#[derive(Component, Default)]
+struct LastDamagedBy(Option<u64>);
+
+pub fn parse_active_quests(json: &str) -> ActiveQuests {
+    if let Ok(parsed) = serde_json::from_str::<ActiveQuests>(json) {
+        parsed
+    } else if let Ok(quests) = serde_json::from_str::<Vec<ActiveQuest>>(json) {
+        ActiveQuests {
+            quests,
+            completed: Vec::new(),
+        }
+    } else {
+        ActiveQuests::default()
+    }
+}
+
+pub fn encode_active_quests(quests: &ActiveQuests) -> String {
+    serde_json::to_string(quests).unwrap_or_else(|_| "[]".to_owned())
+}
 
 #[derive(Component)]
 pub struct Ship(pub ShipState);
@@ -93,6 +166,7 @@ struct PlayerRecord {
     account: Option<Account>,
     owner: Option<u64>,
     name: Option<String>,
+    completed_quests: Vec<String>,
 }
 
 #[derive(Resource, Default)]
@@ -124,6 +198,7 @@ impl Plugin for GameplayPlugin {
             .init_resource::<PlayerRecord>()
             .init_resource::<PlayerRespawn>()
             .init_resource::<PirateRespawn>()
+            .init_resource::<EncounterRng>()
             .add_observer(on_set_throttle)
             .add_observer(on_set_turn)
             .add_observer(on_set_firing)
@@ -132,6 +207,7 @@ impl Plugin for GameplayPlugin {
             .add_observer(on_buy_commodity)
             .add_observer(on_sell_commodity)
             .add_observer(on_set_warp)
+            .add_observer(on_respond_to_encounter)
             .add_observer(on_login_request)
             .add_systems(OnEnter(ServerState::Running), spawn_world)
             .add_systems(
@@ -145,6 +221,7 @@ impl Plugin for GameplayPlugin {
                     projectile_flight,
                     projectile_hits,
                     shield_regen,
+                    quest_progress,
                     ship_deaths,
                     respawn_players,
                     respawn_pirates,
@@ -185,6 +262,7 @@ fn spawn_ship(
             cargo_capacity: def.cargo,
         },
         Control::default(),
+        LastDamagedBy::default(),
         Owner(owner.unwrap_or(0)),
         Position(base + offset),
         Heading(0.0),
@@ -347,6 +425,7 @@ fn on_login_request(
     let capacity = ship_def.cargo;
     let spawn_system = state.system.clone();
     let spawn_position = Vec2::new(state.position.0, state.position.1);
+    let restored_quests = parse_active_quests(&state.active_quests_json);
 
     let ship_entity = spawn_ship(
         &mut commands,
@@ -371,6 +450,7 @@ fn on_login_request(
             cargo: state.cargo.clone(),
             cargo_capacity: capacity,
         },
+        restored_quests,
         ClientRef(client_entity),
         PlayerName(username.clone()),
     ));
@@ -427,6 +507,7 @@ fn spawn_default_player(
             cargo: account.cargo.clone(),
             cargo_capacity: capacity,
         },
+        ActiveQuests::default(),
         ClientRef(client_entity),
         PlayerName("pilot".to_owned()),
     ));
@@ -493,17 +574,14 @@ fn apply_ship_control(
     let dt = time.delta_secs();
     for (control, spec, mut ship) in &mut ships {
         let mut model = spec.flight;
-        if control.warp {
+        let warping = control.warp && ship.0.fuel > 0.0;
+        if warping {
             model.max_speed *= WARP_SPEED_MULTIPLIER;
             model.acceleration *= WARP_SPEED_MULTIPLIER;
             ship.0.fuel = (ship.0.fuel - WARP_FUEL_RATE * dt).max(0.0);
-            if ship.0.fuel <= 0.0 {
-                model.max_speed = spec.flight.max_speed;
-                model.acceleration = spec.flight.acceleration;
-            }
         }
-        ship.0
-            .apply_control(control.turn, control.throttle, &model, dt);
+        let throttle = if warping { 1.0 } else { control.throttle };
+        ship.0.apply_control(control.turn, throttle, &model, dt);
     }
 }
 
@@ -622,7 +700,7 @@ fn projectile_hits(
     projectiles: Query<(Entity, &Position, &Projectile)>,
     aggros: Query<&Aggro>,
     ships: Query<(Entity, &ShipInfo, Option<&ClientRef>), With<Ship>>,
-    mut hittable: Query<(&mut Ship, Option<&mut Wallet>)>,
+    mut hittable: Query<(&mut Ship, &mut LastDamagedBy, Option<&mut Wallet>)>,
 ) {
     let mut hits = Vec::new();
     for (projectile_entity, position, projectile) in &projectiles {
@@ -632,7 +710,7 @@ fn projectile_hits(
             if is_shooter {
                 continue;
             }
-            if let Ok((ship, _)) = hittable.get(ship_entity)
+            if let Ok((ship, _, _)) = hittable.get(ship_entity)
                 && position.0.distance(ship.0.position) <= SHIP_RADIUS
             {
                 hits.push((
@@ -648,10 +726,13 @@ fn projectile_hits(
 
     for (projectile_entity, victim_entity, damage, attacker_owner) in hits {
         commands.entity(projectile_entity).despawn();
-        let Ok((mut victim_ship, _)) = hittable.get_mut(victim_entity) else {
+        let Ok((mut victim_ship, mut last_damaged, _)) = hittable.get_mut(victim_entity) else {
             continue;
         };
         victim_ship.0.apply_damage(damage);
+        if attacker_owner != 0 {
+            last_damaged.0 = Some(attacker_owner);
+        }
 
         let Ok((_, victim_info, _)) = ships.get(victim_entity) else {
             continue;
@@ -690,7 +771,7 @@ fn projectile_hits(
             Vec2::new(250.0, 250.0),
         );
         commands.entity(police).insert((Npc, Aggro(attacker_owner)));
-        if let Ok((_, Some(mut wallet))) = hittable.get_mut(attacker_entity) {
+        if let Ok((_, _, Some(mut wallet))) = hittable.get_mut(attacker_entity) {
             let fine = wallet.0.credits.min(FINE_CREDITS);
             wallet.0.credits -= fine;
             if let Some(client_ref) = attacker_client_ref {
@@ -718,6 +799,80 @@ fn shield_regen(time: Res<Time>, mut ships: Query<&mut Ship>) {
     }
 }
 
+fn quest_progress(
+    mut commands: Commands,
+    time: Res<Time>,
+    dying_npcs: Query<(&Ship, &ShipInfo, &SystemMembership, &LastDamagedBy), With<Npc>>,
+    mut players: Query<
+        (&Owner, &mut ActiveQuests, &mut Wallet, Option<&ClientRef>),
+        With<PlayerShip>,
+    >,
+) {
+    let dt = time.delta_secs();
+
+    for (ship, info, membership, last_damaged) in &dying_npcs {
+        if !ship.0.is_destroyed() || info.kind != ShipKind::Pirate {
+            continue;
+        }
+        let Some(killer_owner) = last_damaged.0 else {
+            continue;
+        };
+        for (owner, mut quests, _, client_ref) in &mut players {
+            if owner.0 != killer_owner {
+                continue;
+            }
+            for quest in &mut quests.quests {
+                if let QuestTarget::Bounty {
+                    system,
+                    target,
+                    killed,
+                } = &mut quest.target
+                    && !*killed
+                    && *system == membership.0
+                    && (*target == info.def_id || target == "pirate")
+                {
+                    *killed = true;
+                    if let Some(client_ref) = client_ref {
+                        notice(
+                            &mut commands,
+                            ClientId::Client(client_ref.0),
+                            format!(
+                                "Bounty target eliminated in {}. Return to {} to collect.",
+                                membership.0, quest.giver_planet
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for (_, mut quests, mut wallet, client_ref) in &mut players {
+        let mut expired = Vec::new();
+        for (idx, quest) in quests.quests.iter_mut().enumerate() {
+            if let Some(rem) = &mut quest.remaining_secs {
+                *rem -= dt;
+                if *rem <= 0.0 {
+                    expired.push(idx);
+                }
+            }
+        }
+        for idx in expired.into_iter().rev() {
+            let failed = quests.quests.remove(idx);
+            if let QuestTarget::Delivery { commodity, qty, .. } = &failed.target {
+                let _ = wallet.0.remove_cargo(commodity, *qty);
+            }
+            if let Some(client_ref) = client_ref {
+                notice(
+                    &mut commands,
+                    ClientId::Client(client_ref.0),
+                    format!("Contract '{}' expired.", failed.name),
+                );
+            }
+        }
+    }
+}
+
 type DyingShips<'w, 's> = Query<
     'w,
     's,
@@ -729,6 +884,7 @@ type DyingShips<'w, 's> = Query<
         &'static Owner,
         Option<&'static ClientRef>,
         Option<&'static Wallet>,
+        Option<&'static ActiveQuests>,
     ),
 >;
 
@@ -743,7 +899,7 @@ fn ship_deaths(
     storage: Res<StorageResource>,
     clients: Query<Entity, With<ConnectedClient>>,
 ) {
-    for (entity, ship, info, membership, owner, client_ref, wallet) in &ships {
+    for (entity, ship, info, membership, owner, client_ref, wallet, active_quests) in &ships {
         if !ship.0.is_destroyed() {
             continue;
         }
@@ -762,9 +918,17 @@ fn ship_deaths(
                 if let Some(wallet) = wallet {
                     record.account = Some(Account::new(wallet.0.credits));
                 }
+                let completed = active_quests
+                    .map(|q| q.completed.clone())
+                    .unwrap_or_default();
+                record.completed_quests = completed.clone();
                 if let Ok(name) = names.get(entity) {
                     record.name = Some(name.0.clone());
                     if let Some(storage) = storage.storage.as_ref() {
+                        let cleared = ActiveQuests {
+                            quests: Vec::new(),
+                            completed,
+                        };
                         let _ = storage.save_player(
                             &name.0,
                             &crate::storage::PlayerState {
@@ -776,6 +940,7 @@ fn ship_deaths(
                                 fuel: 0.0,
                                 shields: 0.0,
                                 armor: 0.0,
+                                active_quests_json: encode_active_quests(&cleared),
                             },
                         );
                     }
@@ -826,6 +991,7 @@ fn respawn_players(
         record.owner = None;
         record.account = None;
         record.name = None;
+        record.completed_quests.clear();
         return;
     }
     let Some((client_entity, _)) = clients.iter().find(|(_, id)| id.get() == owner) else {
@@ -837,6 +1003,7 @@ fn respawn_players(
         .account
         .take()
         .unwrap_or_else(|| Account::new(STARTING_CREDITS));
+    let completed = std::mem::take(&mut record.completed_quests);
     let capacity = content
         .0
         .ship(PLAYER_SHIP)
@@ -859,6 +1026,10 @@ fn respawn_players(
             credits: account.credits,
             cargo: account.cargo.clone(),
             cargo_capacity: capacity,
+        },
+        ActiveQuests {
+            quests: Vec::new(),
+            completed,
         },
         ClientRef(client_entity),
     ));
@@ -937,12 +1108,26 @@ fn sync_accounts(mut players: Query<(&Wallet, &mut AccountState)>) {
     }
 }
 
+type AutoSavePlayers<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static PlayerName,
+        &'static Wallet,
+        &'static Ship,
+        &'static SystemMembership,
+        &'static Fuel,
+        Option<&'static ActiveQuests>,
+    ),
+    With<PlayerShip>,
+>;
+
 fn auto_save(
     time: Res<Time>,
     mut timer: ResMut<SaveTimer>,
     storage: Res<StorageResource>,
     content: Res<Content>,
-    players: Query<(&PlayerName, &Wallet, &Ship, &SystemMembership, &Fuel), With<PlayerShip>>,
+    players: AutoSavePlayers,
 ) {
     const SAVE_INTERVAL: f32 = 10.0;
     timer.0 += time.delta_secs();
@@ -955,7 +1140,7 @@ fn auto_save(
         return;
     };
 
-    for (name, wallet, ship, membership, fuel) in &players {
+    for (name, wallet, ship, membership, fuel, quests) in &players {
         let state = crate::storage::PlayerState {
             credits: wallet.0.credits,
             cargo: wallet.0.cargo.clone(),
@@ -965,6 +1150,7 @@ fn auto_save(
             fuel: fuel.current,
             shields: ship.0.shields,
             armor: ship.0.armor,
+            active_quests_json: quests.map_or_else(|| "[]".to_owned(), encode_active_quests),
         };
         let _ = storage.save_player(&name.0, &state);
     }
@@ -980,24 +1166,37 @@ type LandingShips<'w, 's> = Query<
         &'static Position,
         &'static SystemMembership,
         Option<&'static DockedAt>,
+        Option<&'static ActiveQuests>,
         &'static mut Ship,
         &'static mut Wallet,
     ),
 >;
 
+#[allow(clippy::too_many_arguments)]
 fn on_request_land(
     trigger: On<FromClient<RequestLand>>,
     mut commands: Commands,
     clients: Query<&NetworkId>,
+    content: Res<Content>,
+    mut rng: ResMut<EncounterRng>,
     mut ships: LandingShips,
     planets: Query<(&PlanetTag, &Position)>,
 ) {
     let owner = raw_id(trigger.client_id, &clients);
     let planet_id = &trigger.event().planet;
 
-    let Some((ship_entity, _, ship_position, membership, docked, mut ship, mut wallet)) = ships
+    let Some((
+        ship_entity,
+        _,
+        ship_position,
+        membership,
+        docked,
+        active_quests,
+        mut ship,
+        mut wallet,
+    )) = ships
         .iter_mut()
-        .find(|(_, ship_owner, _, _, _, _, _)| ship_owner.0 == owner)
+        .find(|(_, ship_owner, _, _, _, _, _, _)| ship_owner.0 == owner)
     else {
         return;
     };
@@ -1057,6 +1256,180 @@ fn on_request_land(
             ),
         );
     }
+
+    let empty_quests = ActiveQuests::default();
+    let quests = active_quests.unwrap_or(&empty_quests);
+    if let Some((encounter, pending)) = roll_chief_encounter(
+        &content.0,
+        &mut rng,
+        &membership.0,
+        &planet.id,
+        &wallet.0,
+        quests,
+    ) {
+        commands.entity(ship_entity).insert((encounter, pending));
+    }
+}
+
+fn roll_chief_encounter(
+    pack: &ContentPack,
+    rng: &mut EncounterRng,
+    system_id: &str,
+    planet_id: &str,
+    account: &Account,
+    active_quests: &ActiveQuests,
+) -> Option<(ChiefEncounter, PendingEncounter)> {
+    let system_def = pack.system(system_id)?;
+    let planet_def = system_def.planets.iter().find(|p| p.id == planet_id)?;
+    let chief = planet_def.chief.as_ref()?;
+
+    if let Some(quest) = active_quests.quests.iter().find(|q| match &q.target {
+        QuestTarget::Delivery {
+            commodity,
+            qty,
+            destination_system,
+            destination_planet,
+        } => {
+            let held = account
+                .cargo
+                .iter()
+                .find(|(c, _)| c == commodity)
+                .map_or(0, |(_, q)| *q);
+            destination_system == system_id && destination_planet == planet_id && held >= *qty
+        }
+        QuestTarget::Bounty { killed, .. } => {
+            *killed && q.giver_system == system_id && q.giver_planet == planet_id
+        }
+    }) {
+        let encounter = ChiefEncounter {
+            chief_name: chief.name.clone(),
+            portrait: chief.portrait.clone(),
+            mood: ChiefMood::TurnIn,
+            text: format!(
+                "{}\n\n\"You're back with '{}' complete. Here is the {} cr voucher.\"",
+                chief.greeting, quest.name, quest.reward_credits
+            ),
+            options: vec![
+                EncounterOption {
+                    id: "turn_in".to_owned(),
+                    label: format!("Complete '{}' (+{} cr)", quest.name, quest.reward_credits),
+                },
+                EncounterOption {
+                    id: "decline".to_owned(),
+                    label: "Hold on".to_owned(),
+                },
+            ],
+        };
+        let pending = PendingEncounter::TurnIn {
+            quest_id: quest.id.clone(),
+        };
+        return Some((encounter, pending));
+    }
+
+    let available_quests: Vec<&QuestDef> = pack
+        .quests
+        .iter()
+        .filter(|q| {
+            q.giver.0 == system_id
+                && q.giver.1 == planet_id
+                && !active_quests.quests.iter().any(|aq| aq.id == q.id)
+                && !active_quests.completed.contains(&q.id)
+        })
+        .collect();
+
+    let roll = rng.next_u32(100);
+    if !available_quests.is_empty() && roll < 50 {
+        let idx = rng.next_u32(available_quests.len() as u32) as usize;
+        let quest = available_quests[idx];
+        let encounter = ChiefEncounter {
+            chief_name: chief.name.clone(),
+            portrait: chief.portrait.clone(),
+            mood: ChiefMood::Quest,
+            text: format!(
+                "{}\n{}\n\n{} — {} (Reward: {} cr)",
+                chief.greeting,
+                chief.quest_text,
+                quest.name,
+                quest.description,
+                quest.reward_credits
+            ),
+            options: vec![
+                EncounterOption {
+                    id: "accept_quest".to_owned(),
+                    label: format!("Accept '{}' ({} cr)", quest.name, quest.reward_credits),
+                },
+                EncounterOption {
+                    id: "decline".to_owned(),
+                    label: "Decline contract".to_owned(),
+                },
+            ],
+        };
+        let pending = PendingEncounter::Quest {
+            chief_name: chief.name.clone(),
+            quest_id: quest.id.clone(),
+        };
+        return Some((encounter, pending));
+    }
+
+    let offer_threshold = if available_quests.is_empty() { 60 } else { 80 };
+    if !planet_def.commodities.is_empty() && roll < offer_threshold {
+        let idx = rng.next_u32(planet_def.commodities.len() as u32) as usize;
+        let comm = &planet_def.commodities[idx];
+        let qty = OFFER_QTY;
+        let cost = (comm.price * qty) / 2;
+        let encounter = ChiefEncounter {
+            chief_name: chief.name.clone(),
+            portrait: chief.portrait.clone(),
+            mood: ChiefMood::Offer,
+            text: format!(
+                "{}\n{} ({} {} for {} cr)",
+                chief.greeting, chief.offer_text, qty, comm.id, cost
+            ),
+            options: vec![
+                EncounterOption {
+                    id: "accept_offer".to_owned(),
+                    label: format!("Buy {} {} ({} cr)", qty, comm.id, cost),
+                },
+                EncounterOption {
+                    id: "decline".to_owned(),
+                    label: "Pass on the offer".to_owned(),
+                },
+            ],
+        };
+        let pending = PendingEncounter::Offer {
+            chief_name: chief.name.clone(),
+            commodity: comm.id.clone(),
+            qty,
+            cost,
+        };
+        return Some((encounter, pending));
+    }
+
+    let amount = TRIBUTE_CREDITS;
+    let encounter = ChiefEncounter {
+        chief_name: chief.name.clone(),
+        portrait: chief.portrait.clone(),
+        mood: ChiefMood::Tribute,
+        text: format!(
+            "{}\n{} (Demands {} cr)",
+            chief.greeting, chief.tribute_text, amount
+        ),
+        options: vec![
+            EncounterOption {
+                id: "pay_tribute".to_owned(),
+                label: format!("Pay {} cr tribute", amount),
+            },
+            EncounterOption {
+                id: "refuse_tribute".to_owned(),
+                label: "Refuse to pay".to_owned(),
+            },
+        ],
+    };
+    let pending = PendingEncounter::Tribute {
+        chief_name: chief.name.clone(),
+        amount,
+    };
+    Some((encounter, pending))
 }
 
 fn on_request_lift_off(
@@ -1072,7 +1445,254 @@ fn on_request_lift_off(
     else {
         return;
     };
-    commands.entity(ship_entity).remove::<DockedAt>();
+    commands
+        .entity(ship_entity)
+        .remove::<(DockedAt, ChiefEncounter, PendingEncounter)>();
+}
+
+type EncounterShips<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static Owner,
+        &'static DockedAt,
+        &'static ShipSpec,
+        &'static ChiefEncounter,
+        &'static PendingEncounter,
+        &'static mut Wallet,
+        &'static mut ActiveQuests,
+    ),
+>;
+
+fn on_respond_to_encounter(
+    trigger: On<FromClient<RespondToEncounter>>,
+    mut commands: Commands,
+    clients: Query<&NetworkId>,
+    content: Res<Content>,
+    mut ships: EncounterShips,
+) {
+    let owner = raw_id(trigger.client_id, &clients);
+    let raw_choice = trigger.event().choice.trim();
+    let Some((ship_entity, _, _, spec, encounter, pending, mut wallet, mut active_quests)) = ships
+        .iter_mut()
+        .find(|(_, ship_owner, _, _, _, _, _, _)| ship_owner.0 == owner)
+    else {
+        return;
+    };
+
+    let resolved_choice = if let Ok(index) = raw_choice.parse::<usize>()
+        && index >= 1
+        && index <= encounter.options.len()
+    {
+        encounter.options[index - 1].id.as_str()
+    } else {
+        raw_choice
+    };
+
+    match pending.clone() {
+        PendingEncounter::Offer {
+            chief_name,
+            commodity,
+            qty,
+            cost,
+        } => match resolved_choice {
+            "accept_offer" => {
+                if wallet.0.credits < cost {
+                    notice(&mut commands, trigger.client_id, "You can't afford that.");
+                    return;
+                }
+                if !wallet.0.add_cargo(&commodity, qty, spec.cargo_capacity) {
+                    notice(&mut commands, trigger.client_id, "Your cargo hold is full.");
+                    return;
+                }
+                wallet.0.credits -= cost;
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    format!("Bought {qty} {commodity} from {chief_name} for {cost} cr."),
+                );
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            "decline" => {
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    format!("You pass on {chief_name}'s offer."),
+                );
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            _ => {
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    "That choice isn't on the table.",
+                );
+            }
+        },
+        PendingEncounter::Tribute { chief_name, amount } => match resolved_choice {
+            "pay_tribute" => {
+                if wallet.0.credits < amount {
+                    notice(
+                        &mut commands,
+                        trigger.client_id,
+                        "You don't have the credits to cover the tribute.",
+                    );
+                    return;
+                }
+                wallet.0.credits -= amount;
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    format!("Paid {amount} cr tribute to {chief_name}."),
+                );
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            "refuse_tribute" => {
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    format!(
+                        "{chief_name} marks your hull registry. No fine today, but the port remembers."
+                    ),
+                );
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            _ => {
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    "That choice isn't on the table.",
+                );
+            }
+        },
+        PendingEncounter::Quest {
+            chief_name,
+            quest_id,
+        } => match resolved_choice {
+            "accept_quest" => {
+                let Some(quest_def) = content.0.quest(&quest_id) else {
+                    return;
+                };
+                let target = match &quest_def.kind {
+                    QuestKind::Delivery {
+                        commodity,
+                        qty,
+                        destination,
+                        ..
+                    } => {
+                        if !wallet.0.add_cargo(commodity, *qty, spec.cargo_capacity) {
+                            notice(
+                                &mut commands,
+                                trigger.client_id,
+                                "Your cargo hold is too full for the contract parcel.",
+                            );
+                            return;
+                        }
+                        QuestTarget::Delivery {
+                            commodity: commodity.clone(),
+                            qty: *qty,
+                            destination_system: destination.0.clone(),
+                            destination_planet: destination.1.clone(),
+                        }
+                    }
+                    QuestKind::Bounty { system, target, .. } => QuestTarget::Bounty {
+                        system: system.clone(),
+                        target: target.clone(),
+                        killed: false,
+                    },
+                };
+                active_quests.quests.push(ActiveQuest {
+                    id: quest_def.id.clone(),
+                    name: quest_def.name.clone(),
+                    giver_system: quest_def.giver.0.clone(),
+                    giver_planet: quest_def.giver.1.clone(),
+                    target,
+                    reward_credits: quest_def.reward_credits,
+                    remaining_secs: quest_def.kind.deadline_secs().map(|s| s as f32),
+                });
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    format!("Accepted contract: {}.", quest_def.name),
+                );
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            "decline" => {
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    format!("You decline {chief_name}'s contract."),
+                );
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            _ => {
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    "That choice isn't on the table.",
+                );
+            }
+        },
+        PendingEncounter::TurnIn { quest_id } => match resolved_choice {
+            "turn_in" => {
+                let Some(pos) = active_quests.quests.iter().position(|q| q.id == quest_id) else {
+                    return;
+                };
+                let quest = active_quests.quests[pos].clone();
+                if let QuestTarget::Delivery { commodity, qty, .. } = &quest.target
+                    && !wallet.0.remove_cargo(commodity, *qty)
+                {
+                    notice(
+                        &mut commands,
+                        trigger.client_id,
+                        "You are missing the contract cargo.",
+                    );
+                    return;
+                }
+                active_quests.quests.remove(pos);
+                if !active_quests.completed.contains(&quest.id) {
+                    active_quests.completed.push(quest.id.clone());
+                }
+                wallet.0.credits += quest.reward_credits;
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    format!(
+                        "Completed '{}': received {} cr.",
+                        quest.name, quest.reward_credits
+                    ),
+                );
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            "decline" => {
+                commands
+                    .entity(ship_entity)
+                    .remove::<(ChiefEncounter, PendingEncounter)>();
+            }
+            _ => {
+                notice(
+                    &mut commands,
+                    trigger.client_id,
+                    "That choice isn't on the table.",
+                );
+            }
+        },
+    }
 }
 
 fn on_buy_commodity(
@@ -1782,5 +2402,139 @@ mod tests {
                 police_seen || ships.iter(world).any(|info| info.kind == ShipKind::Police);
         }
         assert!(police_seen, "the patrol must replicate to both players");
+    }
+
+    #[test]
+    fn chief_encounter_and_delivery_quest_loop() {
+        let mut h = Harness::new();
+
+        h.step_until(400, |h| h.my_ship().is_some());
+        let my_ship = h.my_ship().expect("my ship must replicate");
+
+        // Move near Earth and dock; default EncounterRng(4) rolls Quest (newhaven-relief).
+        h.set_server_ship(1, |ship| {
+            ship.position = Vec2::new(480.0, 0.0);
+            ship.velocity = Vec2::ZERO;
+        });
+        for _ in 0..5 {
+            h.step();
+        }
+        h.send(RequestLand {
+            planet: "earth".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_some()
+        });
+        let encounter = h.client_component::<ChiefEncounter>(my_ship).unwrap();
+        assert_eq!(encounter.chief_name, "Port Director Lin");
+        assert_eq!(encounter.mood, ChiefMood::Quest);
+
+        // Accept the delivery quest; 4 medicine courier cargo is loaded automatically.
+        h.send(RespondToEncounter {
+            choice: "accept_quest".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_none()
+                && h.client_component::<ActiveQuests>(my_ship)
+                    .is_some_and(|q| q.quests.len() == 1)
+        });
+        let quests = h.client_component::<ActiveQuests>(my_ship).unwrap();
+        assert_eq!(quests.quests[0].id, "newhaven-relief");
+        let account = h.client_component::<AccountState>(my_ship).unwrap();
+        assert_eq!(account.cargo, vec![("medicine".to_owned(), 4)]);
+
+        // Lift off and fly to Alpha Centauri / Newhaven (planet at 2500.0, 0.0).
+        h.send(RequestLiftOff);
+        h.step_until(100, |h| h.client_component::<DockedAt>(my_ship).is_none());
+
+        h.set_server_ship(1, |ship| {
+            ship.position = Vec2::new(2480.0, 0.0);
+            ship.velocity = Vec2::ZERO;
+        });
+        for _ in 0..5 {
+            h.step();
+        }
+        h.send(RequestLand {
+            planet: "newhaven".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_some()
+        });
+        let turn_in = h.client_component::<ChiefEncounter>(my_ship).unwrap();
+        assert_eq!(turn_in.chief_name, "Magistrate Kael");
+        assert_eq!(turn_in.mood, ChiefMood::TurnIn);
+
+        // Turn in the quest for 450 cr.
+        h.send(RespondToEncounter {
+            choice: "turn_in".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_none()
+                && h.client_component::<ActiveQuests>(my_ship)
+                    .is_some_and(|q| {
+                        q.quests.is_empty() && q.completed.contains(&"newhaven-relief".to_owned())
+                    })
+        });
+        let final_account = h.client_component::<AccountState>(my_ship).unwrap();
+        assert_eq!(final_account.credits, STARTING_CREDITS + 450);
+        assert!(final_account.cargo.is_empty());
+    }
+
+    #[test]
+    fn chief_offer_and_tribute_moods() {
+        let mut h = Harness::new();
+        h.step_until(400, |h| h.my_ship().is_some());
+        let my_ship = h.my_ship().unwrap();
+
+        // Roll 60 selects Offer on Earth.
+        *h.server.world_mut().resource_mut::<EncounterRng>() = EncounterRng::with_roll(60);
+        h.set_server_ship(1, |ship| {
+            ship.position = Vec2::new(480.0, 0.0);
+            ship.velocity = Vec2::ZERO;
+        });
+        for _ in 0..5 {
+            h.step();
+        }
+        h.send(RequestLand {
+            planet: "earth".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_some()
+        });
+        let offer = h.client_component::<ChiefEncounter>(my_ship).unwrap();
+        assert_eq!(offer.mood, ChiefMood::Offer);
+
+        h.send(RespondToEncounter {
+            choice: "accept_offer".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_none()
+        });
+        let after_offer = h.client_component::<AccountState>(my_ship).unwrap();
+        assert!(!after_offer.cargo.is_empty());
+        let credits_after_offer = after_offer.credits;
+
+        h.send(RequestLiftOff);
+        h.step_until(100, |h| h.client_component::<DockedAt>(my_ship).is_none());
+
+        // Roll 90 selects Tribute on Earth.
+        *h.server.world_mut().resource_mut::<EncounterRng>() = EncounterRng::with_roll(90);
+        h.send(RequestLand {
+            planet: "earth".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_some()
+        });
+        let tribute = h.client_component::<ChiefEncounter>(my_ship).unwrap();
+        assert_eq!(tribute.mood, ChiefMood::Tribute);
+
+        h.send(RespondToEncounter {
+            choice: "pay_tribute".into(),
+        });
+        h.step_until(100, |h| {
+            h.client_component::<ChiefEncounter>(my_ship).is_none()
+        });
+        let after_tribute = h.client_component::<AccountState>(my_ship).unwrap();
+        assert_eq!(after_tribute.credits, credits_after_offer - TRIBUTE_CREDITS);
     }
 }
