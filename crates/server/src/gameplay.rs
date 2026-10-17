@@ -347,9 +347,11 @@ fn raw_id(client_id: ClientId, clients: &Query<&NetworkId>) -> u64 {
 }
 
 fn notice(commands: &mut Commands, client: ClientId, text: impl Into<String>) {
+    let text = text.into();
+    info!("server: notice to {client:?}: {text}");
     commands.server_trigger(ToClients {
         targets: SendTargets::Single(client),
-        message: Notice { text: text.into() },
+        message: Notice { text },
     });
 }
 
@@ -366,6 +368,7 @@ fn on_login_request(
     let password = trigger.event().password.clone();
 
     let owner = raw_id(trigger.client_id, &clients);
+    info!("server: login request for '{username}' from client owner={owner}");
     if logged_in.iter().any(|existing| existing.0 == owner) {
         return;
     }
@@ -398,6 +401,7 @@ fn on_login_request(
     };
 
     let (success, message, state) = result;
+    info!("server: login result for '{username}' (owner={owner}): success={success} ({message})");
     let client = trigger.client_id;
     commands.server_trigger(ToClients {
         targets: SendTargets::Single(client),
@@ -470,10 +474,14 @@ fn authorize_clients(
         }
         let owner = network_id.get();
         if let Some((player_entity, _)) = players.iter().find(|(_, existing)| existing.0 == owner) {
+            info!(
+                "server: re-bound authorized client owner={owner} to existing ship {player_entity:?}"
+            );
             commands
                 .entity(player_entity)
                 .insert(ClientRef(client_entity));
         } else if record.owner != Some(owner) {
+            info!("server: spawning default player ship for authorized client owner={owner}");
             spawn_default_player(&mut commands, &content, owner, client_entity);
         }
     }
@@ -530,6 +538,7 @@ fn on_set_throttle(
     let Some(throttle) = sanitize_input(trigger.event().0, 0.0, 1.0) else {
         return;
     };
+    debug!("server: owner={owner} set throttle={throttle:.2}");
     for (ship_owner, mut control) in &mut ships {
         if ship_owner.0 == owner {
             control.throttle = throttle;
@@ -546,6 +555,7 @@ fn on_set_turn(
     let Some(turn) = sanitize_input(trigger.event().0, -1.0, 1.0) else {
         return;
     };
+    debug!("server: owner={owner} set turn={turn:.2}");
     for (ship_owner, mut control) in &mut ships {
         if ship_owner.0 == owner {
             control.turn = turn;
@@ -560,6 +570,7 @@ fn on_set_firing(
 ) {
     let owner = raw_id(trigger.client_id, &clients);
     let firing = trigger.event().0;
+    debug!("server: owner={owner} set firing={firing}");
     for (ship_owner, mut control) in &mut ships {
         if ship_owner.0 == owner {
             control.firing = firing;
@@ -747,6 +758,10 @@ fn projectile_hits(
         let Ok((_, victim_info, _)) = ships.get(victim_entity) else {
             continue;
         };
+        debug!(
+            "server: projectile from owner={attacker_owner} hit '{}' ({:?}) for {damage:.1} dmg (shields={:.1}, armor={:.1})",
+            victim_info.name, victim_info.kind, victim_ship.0.shields, victim_ship.0.armor
+        );
         let is_pvp = victim_info.kind == ShipKind::Player
             && attacker_owner != 0
             && victim_info.owner != Some(attacker_owner);
@@ -1449,12 +1464,16 @@ fn on_request_lift_off(
     ships: Query<(Entity, &Owner, &DockedAt)>,
 ) {
     let owner = raw_id(trigger.client_id, &clients);
-    let Some((ship_entity, _, _)) = ships
+    let Some((ship_entity, _, docked)) = ships
         .iter()
         .find(|(_, ship_owner, _)| ship_owner.0 == owner)
     else {
         return;
     };
+    info!(
+        "server: owner={owner} lifted off from {}/{}",
+        docked.system, docked.planet
+    );
     commands
         .entity(ship_entity)
         .remove::<(DockedAt, ChiefEncounter, PendingEncounter)>();
@@ -1484,9 +1503,10 @@ fn on_respond_to_encounter(
 ) {
     let owner = raw_id(trigger.client_id, &clients);
     let raw_choice = trigger.event().choice.trim();
-    let Some((ship_entity, _, _, spec, encounter, pending, mut wallet, mut active_quests)) = ships
-        .iter_mut()
-        .find(|(_, ship_owner, _, _, _, _, _, _)| ship_owner.0 == owner)
+    let Some((ship_entity, _, docked, spec, encounter, pending, mut wallet, mut active_quests)) =
+        ships
+            .iter_mut()
+            .find(|(_, ship_owner, _, _, _, _, _, _)| ship_owner.0 == owner)
     else {
         return;
     };
@@ -1499,6 +1519,10 @@ fn on_respond_to_encounter(
     } else {
         raw_choice
     };
+    info!(
+        "server: owner={owner} responded to encounter on {}/{} with choice='{resolved_choice}' (raw='{raw_choice}')",
+        docked.system, docked.planet
+    );
 
     match pending.clone() {
         PendingEncounter::Offer {
@@ -1827,6 +1851,7 @@ fn on_set_warp(
 ) {
     let owner = raw_id(trigger.client_id, &clients);
     let warp = trigger.event().0;
+    debug!("server: owner={owner} set warp={warp}");
     for (ship_owner, mut control) in &mut ships {
         if ship_owner.0 == owner {
             control.warp = warp;

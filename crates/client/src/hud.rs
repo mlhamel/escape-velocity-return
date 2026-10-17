@@ -196,11 +196,13 @@ fn spawn_hud(mut commands: Commands) {
 }
 
 fn on_notice(trigger: On<Notice>, mut board: ResMut<Noticeboard>) {
+    info!("client: notice received: {}", trigger.event().text);
     board.text = trigger.event().text.clone();
     board.at = Some(Instant::now());
 }
 
 fn on_player_died(_death: On<PlayerDied>, mut board: ResMut<Noticeboard>) {
+    info!("client: player ship destroyed");
     board.text = "Your ship was destroyed. The yard is building you another.".to_owned();
     board.at = Some(Instant::now());
 }

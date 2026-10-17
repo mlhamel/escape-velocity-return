@@ -40,7 +40,9 @@ fn poll_flight_input(
     let throttle = keys.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]);
     if throttle != state.throttle {
         state.throttle = throttle;
-        commands.client_trigger(SetThrottle(if throttle { 1.0 } else { 0.0 }));
+        let val = if throttle { 1.0 } else { 0.0 };
+        debug!("client: SetThrottle({val})");
+        commands.client_trigger(SetThrottle(val));
     }
 
     let left = i32::from(keys.any_pressed([KeyCode::KeyA, KeyCode::ArrowLeft]));
@@ -48,18 +50,21 @@ fn poll_flight_input(
     let turn = right - left;
     if turn != state.turn {
         state.turn = turn;
+        debug!("client: SetTurn({turn})");
         commands.client_trigger(SetTurn(turn as f32));
     }
 
     let firing = keys.pressed(KeyCode::Space);
     if firing != state.firing {
         state.firing = firing;
+        debug!("client: SetFiring({firing})");
         commands.client_trigger(SetFiring(firing));
     }
 
     let warp = keys.pressed(KeyCode::KeyJ);
     if warp != state.warp {
         state.warp = warp;
+        info!("client: SetWarp({warp})");
         commands.client_trigger(SetWarp(warp));
     }
 }
@@ -104,6 +109,7 @@ fn poll_action_input(
             })
             .min_by_key(|(_, planet_position)| position.0.distance(planet_position.0).to_bits());
         if let Some((planet, _)) = candidate {
+            info!("client: RequestLand({})", planet.id);
             commands.client_trigger(RequestLand {
                 planet: planet.id.clone(),
             });
@@ -111,6 +117,7 @@ fn poll_action_input(
     }
 
     if docked.is_some() && keys.just_pressed(KeyCode::KeyU) {
+        info!("client: RequestLiftOff");
         commands.client_trigger(RequestLiftOff);
     }
 
@@ -124,6 +131,7 @@ fn poll_action_input(
             if let Some(&digit) = DIGIT_KEYS.get(index)
                 && keys.just_pressed(digit)
             {
+                info!("client: RespondToEncounter({})", option.id);
                 commands.client_trigger(RespondToEncounter {
                     choice: option.id.clone(),
                 });
@@ -146,11 +154,13 @@ fn poll_action_input(
         if keys.just_pressed(digit) {
             let selling = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
             if selling {
+                info!("client: SellCommodity({}, 1)", commodity.id);
                 commands.client_trigger(SellCommodity {
                     commodity: commodity.id.clone(),
                     qty: 1,
                 });
             } else {
+                info!("client: BuyCommodity({}, 1)", commodity.id);
                 commands.client_trigger(BuyCommodity {
                     commodity: commodity.id.clone(),
                     qty: 1,

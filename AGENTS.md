@@ -13,9 +13,9 @@ single-player.
 - lint: `cargo clippy --workspace -- -D warnings`
 - format: `cargo fmt --all` (check: `cargo fmt --all --check`)
 - commit check: `cog check` or `make commit-check` (install git hooks: `make hooks` / `cog install-hook --all`)
-- run server: `cargo run -p evr-server [port] [--storage path.db]` (standalone shard; UDP, defaults to 3456; SQLite persistence with --storage)
-- run client online: `cargo run -p evr-client -- --connect host:port [--username name] [--password pw]`
-- run client: `cargo run -p evr-client` (desktop session required)
+- run server: `cargo run -p evr-server [port] [--storage path.db] [--verbose]` (standalone shard; UDP, defaults to 3456; SQLite persistence with --storage)
+- run client online: `cargo run -p evr-client -- --connect host:port [--username name] [--password pw] [--verbose]`
+- run client: `cargo run -p evr-client [-- --verbose]` (desktop session required)
 - capture screenshots: `cargo run -p evr-client -- --capture-tour` (F12 in-game)
 
 ## Structure

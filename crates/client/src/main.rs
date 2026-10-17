@@ -49,6 +49,7 @@ fn send_login(
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let verbose = args.iter().any(|arg| arg == "--verbose" || arg == "-v");
     let capture_tour = args.iter().any(|arg| arg == "--capture-tour");
     let connect_addr = args.iter().position(|arg| arg == "--connect").map(|index| {
         let addr = args
@@ -65,6 +66,19 @@ fn main() {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
+            .set(bevy::log::LogPlugin {
+                level: if verbose {
+                    bevy::log::Level::DEBUG
+                } else {
+                    bevy::log::Level::INFO
+                },
+                filter: if verbose {
+                    "evr_client=trace,evr_server=trace,evr_protocol=debug,bevy_replicon=debug,wgpu=error,naga=warn,bevy_render=info".to_owned()
+                } else {
+                    bevy::log::DEFAULT_FILTER.to_owned()
+                },
+                ..default()
+            })
             .set(AssetPlugin {
                 file_path: "../../assets".to_owned(),
                 ..default()

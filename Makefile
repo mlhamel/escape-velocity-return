@@ -110,11 +110,20 @@ run: run-client ## Launch offline single-player client (alias for run-client)
 run-client: ## Launch Bevy desktop client with embedded server (offline single-player)
 	$(CARGO) run -p evr-client
 
+run-verbose: ## Launch offline single-player client with --verbose logging
+	$(CARGO) run -p evr-client -- --verbose
+
 run-online: ## Connect client to a shard (override HOST, USER, PASS)
 	$(CARGO) run -p evr-client -- --connect $(HOST) --username $(USER) --password $(PASS)
 
+run-online-verbose: ## Connect client to a shard with --verbose logging (override HOST, USER, PASS)
+	$(CARGO) run -p evr-client -- --connect $(HOST) --username $(USER) --password $(PASS) --verbose
+
 run-server: ## Run standalone UDP server with SQLite persistence (override PORT, DB)
 	$(CARGO) run -p evr-server -- $(PORT) --storage $(DB)
+
+run-server-verbose: ## Run standalone UDP server with SQLite persistence and --verbose logging
+	$(CARGO) run -p evr-server -- $(PORT) --storage $(DB) --verbose
 
 run-server-ephemeral: ## Run standalone UDP server with in-memory storage (override PORT)
 	$(CARGO) run -p evr-server -- $(PORT)
