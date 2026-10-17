@@ -6,6 +6,7 @@
 - [add-scenario](add-scenario/SKILL.md) — add a gameplay benchmark & integration test scenario to `content/scenarios/`
 - [planet-chiefs](planet-chiefs/SKILL.md) — build playbook for the chiefs feature: docking encounters, tribute, and quests
 - [benchmark-scenarios](benchmark-scenarios/SKILL.md) — build playbook for MCP-driven scenario benchmarks and integration tests
+- [meteorite-fields](meteorite-fields/SKILL.md) — build playbook for multi-size space meteorites, rotational drift, ship collision damage, and recursive binary fragmentation
 
 Planned (create when the workflow stabilizes):
 
