@@ -48,17 +48,33 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
+      - name: Download previous release benchmark report (if available)
+        id: prev_bench
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view >/dev/null 2>&1; then
+            PREV_TAG=$(gh release view --json tagName -q .tagName)
+            echo "Found previous release: ${PREV_TAG}"
+            echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
+            gh release download "${PREV_TAG}" --pattern "bench-report.json" --output prev-bench-report.json || true
+          else
+            echo "No previous GitHub release found; running initial baseline benchmark."
+          fi
+
       - name: Run gameplay benchmarks (Markdown + JSON)
         run: |
           cargo build --release -p evr-mcp
-          ./target/release/evr-mcp --bench > bench-report.md
-          ./target/release/evr-mcp --bench --json > bench-report.json
+          ./target/release/evr-mcp --bench --compare prev-bench-report.json --save-json bench-report.json > bench-report.md
           cat bench-report.md
 
       - name: Publish benchmark summary to GitHub Actions step summary
         run: |
           {
             echo "## Gameplay Benchmark Report"
+            if [ -n "${{ steps.prev_bench.outputs.prev_tag }}" ]; then
+              echo "_Compared against previous release \`${{ steps.prev_bench.outputs.prev_tag }}\`_"
+            fi
             echo ""
             cat bench-report.md
           } >> "$GITHUB_STEP_SUMMARY"
@@ -73,6 +89,7 @@ jobs:
           COMMIT_TITLE=$(git log -1 --pretty=%s)
           TAG="build-${TIMESTAMP}-${SHORT_SHA}"
           TITLE="Release ${TIMESTAMP} (${SHORT_SHA})"
+          PREV_TAG="${{ steps.prev_bench.outputs.prev_tag }}"
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
@@ -83,6 +100,11 @@ jobs:
             echo "- **Timestamp:** \`${ISO_TIME}\`"
             echo "- **Commit:** \`${GITHUB_SHA}\` (${COMMIT_TITLE})"
             echo "- **Tag:** \`${TAG}\`"
+            if [ -n "${PREV_TAG}" ]; then
+              echo "- **Baseline Comparison:** \`${PREV_TAG}\`"
+            else
+              echo "- **Baseline Comparison:** _Initial baseline (no prior release)_"
+            fi
             echo ""
             echo "### Gameplay Benchmark Report"
             echo ""

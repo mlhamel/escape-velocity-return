@@ -289,15 +289,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(pos) = args.iter().position(|a| a == "--bench") {
         let json_output = args.iter().any(|a| a == "--json");
+        let compare_path = args
+            .iter()
+            .position(|a| a == "--compare")
+            .and_then(|i| args.get(i + 1))
+            .map(PathBuf::from);
+        let save_json_path = args
+            .iter()
+            .position(|a| a == "--save-json")
+            .and_then(|i| args.get(i + 1))
+            .map(PathBuf::from);
         let filter_id = args
             .get(pos + 1)
             .filter(|arg| !arg.starts_with("--"))
             .map(String::as_str);
+        let baseline = compare_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|raw| serde_json::from_str::<Vec<evr_mcp::ScenarioReport>>(&raw).ok());
         let reports = evr_mcp::run_scenarios(&content_root(), filter_id)?;
+        let json_str = serde_json::to_string_pretty(&reports)?;
+        if let Some(save_path) = save_json_path {
+            std::fs::write(save_path, &json_str)?;
+        }
         if json_output {
-            println!("{}", serde_json::to_string_pretty(&reports)?);
+            println!("{json_str}");
         } else {
-            print!("{}", evr_mcp::format_markdown_table(&reports));
+            print!(
+                "{}",
+                evr_mcp::format_markdown_table_with_baseline(&reports, baseline.as_deref())
+            );
         }
         if reports.iter().any(|r| !r.passed) {
             std::process::exit(1);

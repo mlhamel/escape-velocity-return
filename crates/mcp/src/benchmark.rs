@@ -5,14 +5,14 @@ use evr_data::{ContentPack, ScenarioDef, ScenarioStep};
 use evr_protocol::{PlanetTag, Position};
 use evr_server::Content;
 use evr_server::gameplay::EncounterRng;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::harness::{Harness, TickSample};
 
 const SETTLE_TICKS: u32 = 15;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioReport {
     pub id: String,
     pub name: String,
@@ -562,23 +562,61 @@ fn compute_sample_stats(samples: &[TickSample]) -> SampleStats {
 }
 
 pub fn format_markdown_table(reports: &[ScenarioReport]) -> String {
+    format_markdown_table_with_baseline(reports, None)
+}
+
+pub fn format_markdown_table_with_baseline(
+    reports: &[ScenarioReport],
+    baseline: Option<&[ScenarioReport]>,
+) -> String {
     let mut out = String::new();
     out.push_str(
         "| Scenario | Status | Ticks | Avg (us) | p50 (us) | p95 (us) | p99 (us) | Max (us) | Entities (S/C/Proj) | Credits | Fuel | Hull Dmg |\n",
     );
     out.push_str("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
     for r in reports {
-        let status = if r.passed { "PASS" } else { "FAIL" };
+        let prev = baseline.and_then(|b| b.iter().find(|p| p.id == r.id));
+        let status = match (r.passed, baseline.is_some(), prev.is_some()) {
+            (true, true, false) => "PASS (new)",
+            (true, _, _) => "PASS",
+            (false, true, false) => "FAIL (new)",
+            (false, _, _) => "FAIL",
+        };
+        let ticks_cell = match prev {
+            Some(p) => format_i64_delta(r.total_ticks, p.total_ticks),
+            None => r.total_ticks.to_string(),
+        };
+        let avg_cell = match prev {
+            Some(p) => format_pct_delta(r.avg_tick_us, p.avg_tick_us),
+            None => r.avg_tick_us.to_string(),
+        };
+        let p50_cell = match prev {
+            Some(p) => format_pct_delta(r.p50_tick_us, p.p50_tick_us),
+            None => r.p50_tick_us.to_string(),
+        };
+        let p95_cell = match prev {
+            Some(p) => format_pct_delta(r.p95_tick_us, p.p95_tick_us),
+            None => r.p95_tick_us.to_string(),
+        };
+        let p99_cell = match prev {
+            Some(p) => format_pct_delta(r.p99_tick_us, p.p99_tick_us),
+            None => r.p99_tick_us.to_string(),
+        };
+        let max_cell = match prev {
+            Some(p) => format_pct_delta(r.max_tick_us, p.max_tick_us),
+            None => r.max_tick_us.to_string(),
+        };
+
         out.push_str(&format!(
             "| `{}` | {} | {} | {} | {} | {} | {} | {} | {}/{}/{} | {:+} | {:.1} | {:.1} |\n",
             r.id,
             status,
-            r.total_ticks,
-            r.avg_tick_us,
-            r.p50_tick_us,
-            r.p95_tick_us,
-            r.p99_tick_us,
-            r.max_tick_us,
+            ticks_cell,
+            avg_cell,
+            p50_cell,
+            p95_cell,
+            p99_cell,
+            max_cell,
             r.peak_server_entities,
             r.peak_client_entities,
             r.peak_projectiles,
@@ -591,4 +629,66 @@ pub fn format_markdown_table(reports: &[ScenarioReport]) -> String {
         }
     }
     out
+}
+
+fn format_pct_delta(current: u64, previous: u64) -> String {
+    if previous == 0 {
+        return current.to_string();
+    }
+    let pct = ((current as f64 - previous as f64) / previous as f64) * 100.0;
+    if pct.abs() < 0.05 {
+        format!("{current} (0.0%)")
+    } else {
+        format!("{current} ({pct:+.1}%)")
+    }
+}
+
+fn format_i64_delta(current: u64, previous: u64) -> String {
+    let diff = current as i64 - previous as i64;
+    if diff == 0 {
+        format!("{current} (0)")
+    } else {
+        format!("{current} ({diff:+})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_table_with_baseline_includes_percentage_variations() {
+        let prev = vec![ScenarioReport {
+            id: "sol-centauri-trade".to_owned(),
+            name: "Trade".to_owned(),
+            passed: true,
+            error: None,
+            total_ticks: 600,
+            assertions_passed: 5,
+            avg_tick_us: 100,
+            p50_tick_us: 100,
+            p95_tick_us: 200,
+            p99_tick_us: 300,
+            max_tick_us: 400,
+            server_avg_us: 60,
+            client_avg_us: 40,
+            peak_server_entities: 10,
+            peak_client_entities: 10,
+            peak_projectiles: 0,
+            credits_delta: 44,
+            fuel_consumed: 45.0,
+            hull_damage_taken: 0.0,
+            quests_completed: 0,
+        }];
+        let mut curr = prev.clone();
+        curr[0].total_ticks = 615;
+        curr[0].avg_tick_us = 95;
+        curr[0].p95_tick_us = 210;
+
+        let table = format_markdown_table_with_baseline(&curr, Some(&prev));
+        assert!(table.contains("615 (+15)"));
+        assert!(table.contains("95 (-5.0%)"));
+        assert!(table.contains("100 (0.0%)"));
+        assert!(table.contains("210 (+5.0%)"));
+    }
 }
