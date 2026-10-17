@@ -136,6 +136,18 @@ impl ContentPack {
         let system_ids: std::collections::HashSet<_> =
             systems.iter().map(|s| s.id.clone()).collect();
         for system in systems {
+            if let Some(field) = &system.meteorites
+                && field.count > 0
+                && (field.radius <= 0.0
+                    || (field.stationary_weight == 0
+                        && field.slow_weight == 0
+                        && field.fast_weight == 0))
+            {
+                return Err(ContentError::UnknownReference {
+                    kind: "meteorite field config",
+                    id: system.id.clone(),
+                });
+            }
             for link in &system.links {
                 validate_reference("system link", link, &system_ids)?;
                 let target_has_back_link = systems

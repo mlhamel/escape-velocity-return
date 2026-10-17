@@ -157,6 +157,66 @@ impl Account {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeteoriteTier {
+    Large,
+    Medium,
+    Small,
+}
+
+impl MeteoriteTier {
+    pub const fn radius(self) -> f32 {
+        match self {
+            Self::Large => 28.0,
+            Self::Medium => 17.0,
+            Self::Small => 10.0,
+        }
+    }
+
+    pub const fn max_hp(self) -> f32 {
+        match self {
+            Self::Large => 27.0,
+            Self::Medium => 18.0,
+            Self::Small => 9.0,
+        }
+    }
+
+    pub const fn collision_damage(self) -> f32 {
+        match self {
+            Self::Large => 18.0,
+            Self::Medium => 10.0,
+            Self::Small => 5.0,
+        }
+    }
+
+    pub const fn child_tier(self) -> Option<Self> {
+        match self {
+            Self::Large => Some(Self::Medium),
+            Self::Medium => Some(Self::Small),
+            Self::Small => None,
+        }
+    }
+}
+
+pub fn split_meteorite_velocities(
+    parent_velocity: Vec2,
+    fallback_dir: Vec2,
+    speed_boost: f32,
+) -> (Vec2, Vec2) {
+    let base_dir = parent_velocity
+        .try_normalize()
+        .or_else(|| fallback_dir.try_normalize())
+        .unwrap_or(Vec2::X);
+    let speed = (parent_velocity.length() + speed_boost).max(speed_boost.max(25.0));
+    let angle = 0.733_038_3_f32; // ~42 degrees
+    let rot_pos = Vec2::from_angle(angle);
+    let rot_neg = Vec2::from_angle(-angle);
+    (
+        base_dir.rotate(rot_pos) * speed,
+        base_dir.rotate(rot_neg) * speed,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,5 +354,29 @@ mod tests {
         assert_eq!(account.cargo_qty("food"), 0);
         assert!(account.cargo.is_empty());
         assert!(!account.remove_cargo("food", 1));
+    }
+
+    #[test]
+    fn meteorite_tier_binary_split_chain_terminates() {
+        assert_eq!(
+            MeteoriteTier::Large.child_tier(),
+            Some(MeteoriteTier::Medium)
+        );
+        assert_eq!(
+            MeteoriteTier::Medium.child_tier(),
+            Some(MeteoriteTier::Small)
+        );
+        assert_eq!(MeteoriteTier::Small.child_tier(), None);
+        assert!(MeteoriteTier::Large.radius() > MeteoriteTier::Medium.radius());
+        assert!(MeteoriteTier::Medium.radius() > MeteoriteTier::Small.radius());
+    }
+
+    #[test]
+    fn split_meteorite_velocities_diverge() {
+        let (v1, v2) = split_meteorite_velocities(Vec2::new(40.0, 0.0), Vec2::X, 15.0);
+        assert!(v1.x > 0.0 && v2.x > 0.0);
+        assert!(v1.y > 0.0 && v2.y < 0.0);
+        assert!((v1.length() - 55.0).abs() < 1e-3);
+        assert!((v2.length() - 55.0).abs() < 1e-3);
     }
 }

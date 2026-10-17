@@ -8,10 +8,10 @@ use evr_core::{Account, FlightModel, ShipState, WeaponState};
 use evr_data::{ContentPack, OutfitKind, QuestDef, QuestKind, WeaponDef};
 use evr_protocol::{
     AccountState, ActiveQuest, ActiveQuests, BuyCommodity, ChiefEncounter, ChiefMood, DockedAt,
-    EncounterOption, Explosion, Fuel, Heading, Hull, LoginRequest, LoginResponse, Notice,
-    PlanetTag, PlayerDied, Position, Projectile, QuestTarget, RequestLand, RequestLiftOff,
-    RespondToEncounter, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo,
-    ShipKind, SystemMembership,
+    EncounterOption, Explosion, Fuel, Heading, Hull, LoginRequest, LoginResponse, Meteorite,
+    MeteoriteSize, Notice, PlanetTag, PlayerDied, Position, Projectile, QuestTarget, RequestLand,
+    RequestLiftOff, RespondToEncounter, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp,
+    ShipInfo, ShipKind, SystemMembership,
 };
 
 use crate::Content;
@@ -42,6 +42,15 @@ pub const WARP_FUEL_RATE: f32 = 8.0;
 pub const DEFAULT_ENCOUNTER_SEED: u64 = 0;
 pub const TRIBUTE_CREDITS: u32 = 50;
 pub const OFFER_QTY: u32 = 3;
+pub const METEORITE_HIT_COOLDOWN_SECS: f32 = 0.6;
+
+#[derive(Component, Debug, Clone)]
+pub struct MeteoriteMotion {
+    pub velocity: Vec2,
+    pub center: Vec2,
+    pub field_radius: f32,
+    pub hit_cooldown: f32,
+}
 
 #[derive(Resource, Debug, Clone)]
 pub struct EncounterRng(pub u64);
@@ -215,11 +224,13 @@ impl Plugin for GameplayPlugin {
                 (
                     authorize_clients,
                     apply_ship_control,
+                    meteorite_movement,
                     update_system_membership,
                     pirate_ai,
                     fire_weapons,
                     projectile_flight,
                     projectile_hits,
+                    meteorite_ship_collisions,
                     shield_regen,
                     quest_progress,
                     ship_deaths,
@@ -309,9 +320,51 @@ fn spawn_ship(
     entity.id()
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_meteorite(
+    commands: &mut Commands,
+    system: &str,
+    center: Vec2,
+    field_radius: f32,
+    position: Vec2,
+    velocity: Vec2,
+    size: MeteoriteSize,
+    spin_rate: f32,
+    variant: u8,
+) -> Entity {
+    let effective_spin = if velocity.length_squared() > 0.0 {
+        if spin_rate == 0.0 { 1.2 } else { spin_rate }
+    } else {
+        0.0
+    };
+    let max_hp = size.max_hp();
+    commands
+        .spawn((
+            Replicated,
+            Meteorite {
+                size,
+                hp: max_hp,
+                max_hp,
+                spin_rate: effective_spin,
+                variant,
+            },
+            MeteoriteMotion {
+                velocity,
+                center,
+                field_radius,
+                hit_cooldown: 0.0,
+            },
+            Position(position),
+            Heading(0.0),
+            SystemMembership(system.to_owned()),
+        ))
+        .id()
+}
+
 fn spawn_world(mut commands: Commands, content: Res<Content>) {
     let pack = &content.0;
     for system in &pack.systems {
+        let sys_center = Vec2::new(system.position.0, system.position.1);
         for (index, planet) in system.planets.iter().enumerate() {
             commands.spawn((
                 Replicated,
@@ -326,6 +379,52 @@ fn spawn_world(mut commands: Commands, content: Res<Content>) {
                     system.position.1,
                 )),
             ));
+        }
+
+        if let Some(field) = &system.meteorites {
+            let total_weight =
+                (field.stationary_weight + field.slow_weight + field.fast_weight).max(1);
+            for i in 0..field.count {
+                let size = match i % 3 {
+                    0 => MeteoriteSize::Large,
+                    1 => MeteoriteSize::Medium,
+                    _ => MeteoriteSize::Small,
+                };
+                // Place meteorites in upper and lower belts (|y| >= 240) so the equatorial
+                // planet/jump approach lane starts clear of immediate spawn-point collisions.
+                let band_sign = if i % 2 == 0 { 1.0_f32 } else { -1.0_f32 };
+                let frac = (i as f32 + 0.5) / (field.count.max(1) as f32);
+                let offset_x = (frac - 0.5) * field.radius * 1.3;
+                let offset_y = band_sign * (260.0 + ((i * 137) % 380) as f32);
+                let pos = sys_center + Vec2::new(offset_x, offset_y);
+
+                let bucket = (i * 7 + 3) % total_weight;
+                let dir_angle = ((i as f32) * 1.15) - 0.5;
+                let dir = Vec2::new(dir_angle.cos(), dir_angle.sin() * 0.35).normalize_or(Vec2::X);
+                let spin_sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+
+                let (velocity, spin_rate) = if bucket < field.stationary_weight {
+                    (Vec2::ZERO, 0.0)
+                } else if bucket < field.stationary_weight + field.slow_weight {
+                    let speed = 22.0 + ((i * 11) % 18) as f32;
+                    (dir * speed, spin_sign * (0.8 + (i % 3) as f32 * 0.25))
+                } else {
+                    let speed = 82.0 + ((i * 17) % 40) as f32;
+                    (dir * speed, spin_sign * (2.0 + (i % 3) as f32 * 0.45))
+                };
+
+                spawn_meteorite(
+                    &mut commands,
+                    &system.id,
+                    sys_center,
+                    field.radius,
+                    pos,
+                    velocity,
+                    size,
+                    spin_rate,
+                    (i % 4) as u8,
+                );
+            }
         }
     }
     spawn_ship(
@@ -715,16 +814,27 @@ fn projectile_flight(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn projectile_hits(
     mut commands: Commands,
     content: Res<Content>,
-    projectiles: Query<(Entity, &Position, &Projectile)>,
+    projectiles: Query<(Entity, &Position, &Heading, &Projectile)>,
     aggros: Query<&Aggro>,
     ships: Query<(Entity, &ShipInfo, Option<&ClientRef>), With<Ship>>,
     mut hittable: Query<(&mut Ship, &mut LastDamagedBy, Option<&mut Wallet>), Without<DockedAt>>,
+    mut meteorites: Query<(
+        Entity,
+        &Position,
+        &mut Meteorite,
+        &MeteoriteMotion,
+        &SystemMembership,
+    )>,
+    clients: Query<Entity, With<ConnectedClient>>,
 ) {
-    let mut hits = Vec::new();
-    for (projectile_entity, position, projectile) in &projectiles {
+    let mut ship_hits = Vec::new();
+    let mut meteorite_hits = Vec::new();
+    for (projectile_entity, position, heading, projectile) in &projectiles {
+        let mut hit_ship = false;
         for (ship_entity, info, _) in &ships {
             let is_shooter = info.owner == Some(projectile.owner)
                 || (projectile.owner == 0 && info.kind != ShipKind::Player);
@@ -734,18 +844,56 @@ fn projectile_hits(
             if let Ok((ship, _, _)) = hittable.get(ship_entity)
                 && position.0.distance(ship.0.position) <= SHIP_RADIUS
             {
-                hits.push((
+                ship_hits.push((
                     projectile_entity,
                     ship_entity,
                     projectile.damage,
                     projectile.owner,
                 ));
+                hit_ship = true;
+                break;
+            }
+        }
+        if hit_ship {
+            continue;
+        }
+        for (m_entity, m_pos, meteorite, _, _) in &meteorites {
+            if position.0.distance(m_pos.0) <= meteorite.size.radius() {
+                let proj_dir = Vec2::new(heading.0.cos(), heading.0.sin());
+                meteorite_hits.push((projectile_entity, m_entity, projectile.damage, proj_dir));
                 break;
             }
         }
     }
 
-    for (projectile_entity, victim_entity, damage, attacker_owner) in hits {
+    for (projectile_entity, m_entity, damage, proj_dir) in meteorite_hits {
+        commands.entity(projectile_entity).despawn();
+        let Ok((_, m_pos, mut meteorite, motion, m_sys)) = meteorites.get_mut(m_entity) else {
+            continue;
+        };
+        if meteorite.hp <= 0.0 {
+            continue;
+        }
+        meteorite.hp = (meteorite.hp - damage).max(0.0);
+        debug!(
+            "server: projectile hit {:?} meteorite in '{}' for {damage:.1} dmg (hp={:.1}/{:.1})",
+            meteorite.size, m_sys.0, meteorite.hp, meteorite.max_hp
+        );
+        if meteorite.hp <= 0.0 {
+            fragment_meteorite(
+                &mut commands,
+                m_entity,
+                m_pos.0,
+                &meteorite,
+                motion,
+                &m_sys.0,
+                proj_dir,
+                &clients,
+            );
+        }
+    }
+
+    for (projectile_entity, victim_entity, damage, attacker_owner) in ship_hits {
         commands.entity(projectile_entity).despawn();
         let Ok((mut victim_ship, mut last_damaged, _)) = hittable.get_mut(victim_entity) else {
             continue;
@@ -813,6 +961,144 @@ fn projectile_hits(
                 ClientId::Client(client_ref.0),
                 "A Confederation patrol locks onto you.",
             );
+        }
+    }
+}
+
+fn meteorite_movement(
+    time: Res<Time>,
+    mut meteorites: Query<(
+        &mut Position,
+        &mut Heading,
+        &Meteorite,
+        &mut MeteoriteMotion,
+    )>,
+) {
+    let dt = time.delta_secs();
+    for (mut pos, mut heading, meteorite, mut motion) in &mut meteorites {
+        motion.hit_cooldown = (motion.hit_cooldown - dt).max(0.0);
+        if motion.velocity.length_squared() > 0.0 {
+            pos.0 += motion.velocity * dt;
+            heading.0 = (heading.0 + meteorite.spin_rate * dt + PI).rem_euclid(2.0 * PI) - PI;
+            let offset = pos.0 - motion.center;
+            if motion.field_radius > 0.0 && offset.length() > motion.field_radius {
+                let wrapped =
+                    motion.center - offset.normalize_or(Vec2::X) * (motion.field_radius - 12.0);
+                pos.0 = wrapped;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fragment_meteorite(
+    commands: &mut Commands,
+    entity: Entity,
+    position: Vec2,
+    meteorite: &Meteorite,
+    motion: &MeteoriteMotion,
+    system: &str,
+    impact_dir: Vec2,
+    clients: &Query<Entity, With<ConnectedClient>>,
+) {
+    let explosion = Explosion {
+        position: (position.x, position.y),
+        system: system.to_owned(),
+    };
+    for client_entity in clients {
+        commands.server_trigger(ToClients {
+            targets: SendTargets::Single(ClientId::Client(client_entity)),
+            message: explosion.clone(),
+        });
+    }
+    commands.entity(entity).despawn();
+
+    if let Some(child_size) = meteorite.size.child_size() {
+        let (v1, v2) = evr_core::split_meteorite_velocities(motion.velocity, impact_dir, 22.0);
+        let lateral = (v1 - v2).try_normalize().unwrap_or(Vec2::Y) * (child_size.radius() * 0.9);
+        let base_spin = meteorite.spin_rate.abs().max(1.2) * 1.35;
+        info!(
+            "server: {:?} meteorite in '{}' split into 2 {:?} fragments at ({:.0}, {:.0})",
+            meteorite.size, system, child_size, position.x, position.y
+        );
+        spawn_meteorite(
+            commands,
+            system,
+            motion.center,
+            motion.field_radius,
+            position + lateral,
+            v1,
+            child_size,
+            base_spin,
+            meteorite.variant.wrapping_add(1),
+        );
+        spawn_meteorite(
+            commands,
+            system,
+            motion.center,
+            motion.field_radius,
+            position - lateral,
+            v2,
+            child_size,
+            -base_spin,
+            meteorite.variant.wrapping_add(2),
+        );
+    } else {
+        info!(
+            "server: Small meteorite in '{}' shattered and disappeared at ({:.0}, {:.0})",
+            system, position.x, position.y
+        );
+    }
+}
+
+fn meteorite_ship_collisions(
+    mut commands: Commands,
+    mut ships: Query<(&mut Ship, &ShipInfo), Without<DockedAt>>,
+    mut meteorites: Query<(
+        Entity,
+        &Position,
+        &mut Meteorite,
+        &mut MeteoriteMotion,
+        &SystemMembership,
+    )>,
+    clients: Query<Entity, With<ConnectedClient>>,
+) {
+    for (m_entity, m_pos, mut meteorite, mut motion, m_sys) in &mut meteorites {
+        if motion.hit_cooldown > 0.0 || meteorite.hp <= 0.0 {
+            continue;
+        }
+        let hit_radius = SHIP_RADIUS + meteorite.size.radius();
+        for (mut ship, info) in &mut ships {
+            let delta = ship.0.position - m_pos.0;
+            let dist = delta.length();
+            if dist <= hit_radius {
+                let damage = meteorite.size.collision_damage();
+                ship.0.apply_damage(damage);
+                let normal = delta.try_normalize().unwrap_or(Vec2::X);
+                ship.0.position = m_pos.0 + normal * (hit_radius + 4.0);
+                ship.0.velocity += normal * 75.0;
+                motion.hit_cooldown = METEORITE_HIT_COOLDOWN_SECS;
+
+                info!(
+                    "server: '{}' ({:?}) crashed into {:?} meteorite for {damage:.1} dmg (shields={:.1}, armor={:.1})",
+                    info.name, info.kind, meteorite.size, ship.0.shields, ship.0.armor
+                );
+
+                meteorite.hp = (meteorite.hp - 12.0).max(0.0);
+                if meteorite.hp <= 0.0 {
+                    fragment_meteorite(
+                        &mut commands,
+                        m_entity,
+                        m_pos.0,
+                        &meteorite,
+                        &motion,
+                        &m_sys.0,
+                        -normal,
+                        &clients,
+                    );
+                }
+                break;
+            }
         }
     }
 }
@@ -2571,5 +2857,215 @@ mod tests {
         });
         let after_tribute = h.client_component::<AccountState>(my_ship).unwrap();
         assert_eq!(after_tribute.credits, credits_after_offer - TRIBUTE_CREDITS);
+    }
+
+    #[test]
+    fn meteorite_stationary_vs_moving_spin_and_drift() {
+        let mut h = Harness::new();
+        h.step_until(200, |h| h.my_ship().is_some());
+
+        // Clear default meteorites and spawn 1 stationary and 1 moving meteorite.
+        let existing: Vec<Entity> = h
+            .server
+            .world_mut()
+            .query_filtered::<Entity, With<Meteorite>>()
+            .iter(h.server.world())
+            .collect();
+        for e in existing {
+            h.server.world_mut().despawn(e);
+        }
+
+        let mut cmds = h.server.world_mut().commands();
+        let stat_e = spawn_meteorite(
+            &mut cmds,
+            "sol",
+            Vec2::ZERO,
+            1200.0,
+            Vec2::new(0.0, 400.0),
+            Vec2::ZERO,
+            MeteoriteSize::Large,
+            2.0, // should be forced to 0.0 because velocity is zero
+            0,
+        );
+        let mov_e = spawn_meteorite(
+            &mut cmds,
+            "sol",
+            Vec2::ZERO,
+            1200.0,
+            Vec2::new(0.0, -400.0),
+            Vec2::new(50.0, 0.0),
+            MeteoriteSize::Medium,
+            1.8,
+            1,
+        );
+        h.server.world_mut().flush();
+
+        for _ in 0..30 {
+            h.step();
+        }
+
+        let stat_pos = h.server.world().get::<Position>(stat_e).unwrap().0;
+        let stat_head = h.server.world().get::<Heading>(stat_e).unwrap().0;
+        let stat_m = h.server.world().get::<Meteorite>(stat_e).unwrap();
+        assert_eq!(stat_m.spin_rate, 0.0);
+        assert_eq!(stat_pos, Vec2::new(0.0, 400.0));
+        assert_eq!(stat_head, 0.0);
+
+        let mov_pos = h.server.world().get::<Position>(mov_e).unwrap().0;
+        let mov_head = h.server.world().get::<Heading>(mov_e).unwrap().0;
+        assert!(
+            mov_pos.x > 10.0,
+            "moving meteorite must drift along velocity"
+        );
+        assert!(
+            mov_head.abs() > 0.1,
+            "moving meteorite must rotate on itself"
+        );
+    }
+
+    #[test]
+    fn meteorite_collision_damages_undocked_ship() {
+        let mut h = Harness::new();
+        h.step_until(200, |h| h.my_ship().is_some());
+        let my_ship = h.my_ship().unwrap();
+
+        let initial_shields = h.client_component::<Hull>(my_ship).unwrap().shields;
+
+        // Spawn a Large meteorite right on top of the player ship at (0, 0).
+        let mut cmds = h.server.world_mut().commands();
+        spawn_meteorite(
+            &mut cmds,
+            "sol",
+            Vec2::ZERO,
+            1200.0,
+            Vec2::new(10.0, 0.0),
+            Vec2::new(-30.0, 0.0),
+            MeteoriteSize::Large,
+            1.2,
+            0,
+        );
+        h.server.world_mut().flush();
+
+        h.step_until(60, |h| {
+            h.client_component::<Hull>(my_ship)
+                .is_some_and(|hull| hull.shields < initial_shields)
+        });
+        let hull_after = h.client_component::<Hull>(my_ship).unwrap();
+        assert!(
+            hull_after.shields < initial_shields,
+            "crashing into a meteorite must damage the ship"
+        );
+    }
+
+    #[test]
+    fn meteorite_recursive_binary_fragmentation_until_disappear() {
+        let mut h = Harness::new();
+        h.step_until(200, |h| h.my_ship().is_some());
+
+        // Clear all default meteorites so we can track the exact 1 -> 2 -> 4 -> 0 chain.
+        let existing: Vec<Entity> = h
+            .server
+            .world_mut()
+            .query_filtered::<Entity, With<Meteorite>>()
+            .iter(h.server.world())
+            .collect();
+        for e in existing {
+            h.server.world_mut().despawn(e);
+        }
+
+        let mut cmds = h.server.world_mut().commands();
+        let root = spawn_meteorite(
+            &mut cmds,
+            "sol",
+            Vec2::ZERO,
+            1200.0,
+            Vec2::new(90.0, 0.0),
+            Vec2::ZERO,
+            MeteoriteSize::Large,
+            0.0,
+            0,
+        );
+        h.server.world_mut().flush();
+
+        // Aim player ship at the Large meteorite and fire until it splits into 2 Medium parts.
+        h.send(SetFiring(true));
+        h.step_until(200, |h| {
+            let mut q = h.server.world_mut().query::<&Meteorite>();
+            let world = h.server.world();
+            q.iter(world).count() == 2 && q.iter(world).all(|m| m.size == MeteoriteSize::Medium)
+        });
+        assert!(
+            h.server.world().get_entity(root).is_err(),
+            "parent Large meteorite must be despawned"
+        );
+
+        // Move each Medium meteorite in front of the ship in turn and shoot until we have 4 Small parts.
+        for _ in 0..2 {
+            let med_entity = h
+                .server
+                .world_mut()
+                .query::<(Entity, &Meteorite)>()
+                .iter(h.server.world())
+                .find(|(_, m)| m.size == MeteoriteSize::Medium)
+                .map(|(e, _)| e)
+                .expect("expected a Medium meteorite");
+            h.server
+                .world_mut()
+                .get_mut::<Position>(med_entity)
+                .unwrap()
+                .0 = Vec2::new(85.0, 0.0);
+            h.server
+                .world_mut()
+                .get_mut::<MeteoriteMotion>(med_entity)
+                .unwrap()
+                .velocity = Vec2::ZERO;
+
+            h.step_until(200, |h| h.server.world().get_entity(med_entity).is_err());
+        }
+
+        let small_count = h
+            .server
+            .world_mut()
+            .query::<&Meteorite>()
+            .iter(h.server.world())
+            .filter(|m| m.size == MeteoriteSize::Small)
+            .count();
+        assert_eq!(
+            small_count, 4,
+            "2 Medium meteorites must split into 4 Small parts"
+        );
+
+        // Shoot all 4 Small meteorites and verify they disappear completely (0 remaining).
+        while let Some(small_entity) = h
+            .server
+            .world_mut()
+            .query::<(Entity, &Meteorite)>()
+            .iter(h.server.world())
+            .find(|(_, m)| m.size == MeteoriteSize::Small)
+            .map(|(e, _)| e)
+        {
+            h.server
+                .world_mut()
+                .get_mut::<Position>(small_entity)
+                .unwrap()
+                .0 = Vec2::new(80.0, 0.0);
+            h.server
+                .world_mut()
+                .get_mut::<MeteoriteMotion>(small_entity)
+                .unwrap()
+                .velocity = Vec2::ZERO;
+            h.step_until(200, |h| h.server.world().get_entity(small_entity).is_err());
+        }
+
+        let remaining = h
+            .server
+            .world_mut()
+            .query::<&Meteorite>()
+            .iter(h.server.world())
+            .count();
+        assert_eq!(
+            remaining, 0,
+            "Small meteorites must disappear when destroyed"
+        );
     }
 }

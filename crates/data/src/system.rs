@@ -9,6 +9,37 @@ pub struct SystemDef {
     pub position: (f32, f32),
     pub links: Vec<String>,
     pub planets: Vec<PlanetDef>,
+    #[serde(default)]
+    pub meteorites: Option<MeteoriteFieldDef>,
+}
+
+fn default_field_radius() -> f32 {
+    1200.0
+}
+
+fn default_stationary_weight() -> u32 {
+    2
+}
+
+fn default_slow_weight() -> u32 {
+    5
+}
+
+fn default_fast_weight() -> u32 {
+    3
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MeteoriteFieldDef {
+    pub count: u32,
+    #[serde(default = "default_field_radius")]
+    pub radius: f32,
+    #[serde(default = "default_stationary_weight")]
+    pub stationary_weight: u32,
+    #[serde(default = "default_slow_weight")]
+    pub slow_weight: u32,
+    #[serde(default = "default_fast_weight")]
+    pub fast_weight: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -69,4 +69,17 @@ pub enum ScenarioStep {
         count: usize,
     },
     AssertCompletedQuest(String),
+    ClearMeteorites,
+    SpawnMeteorite {
+        size: String,
+        offset: (f32, f32),
+        #[serde(default)]
+        velocity: (f32, f32),
+    },
+    DestroyNearestMeteorite,
+    AssertMeteorites {
+        count: usize,
+        #[serde(default)]
+        size: Option<String>,
+    },
 }

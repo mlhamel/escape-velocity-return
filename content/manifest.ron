@@ -33,5 +33,6 @@
         "scenarios/sol-centauri-trade.ron",
         "scenarios/quest-delivery-loop.ron",
         "scenarios/combat-dock-immunity.ron",
+        "scenarios/meteorite-fragmentation.ron",
     ],
 )

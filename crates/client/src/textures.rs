@@ -9,6 +9,7 @@ pub struct Textures {
     pub planet: Handle<Image>,
     pub glow: Handle<Image>,
     pub chief: Handle<Image>,
+    pub meteorites: [Handle<Image>; 3],
 }
 
 pub(crate) fn create_textures(
@@ -20,6 +21,11 @@ pub(crate) fn create_textures(
     let planet = images.add(planet_image(128));
     let glow = images.add(glow_image(64));
     let chief = images.add(chief_image(128));
+    let meteorites = [
+        images.add(meteorite_image(96, 0)),
+        images.add(meteorite_image(96, 1)),
+        images.add(meteorite_image(96, 2)),
+    ];
     for system in &content.0.systems {
         for accent in crate::sky_gen::nebula_accents(&system.id, 3) {
             let mut nebula = Sprite::from_image(glow.clone());
@@ -37,7 +43,95 @@ pub(crate) fn create_textures(
         planet,
         glow,
         chief,
+        meteorites,
     });
+}
+
+fn meteorite_image(size: u32, variant: usize) -> Image {
+    let mut data = vec![0; (size * size * 4) as usize];
+    let profiles: [&[(f32, f32)]; 3] = [
+        &[
+            (0.92, 0.48),
+            (0.78, 0.20),
+            (0.48, 0.10),
+            (0.20, 0.22),
+            (0.08, 0.46),
+            (0.18, 0.76),
+            (0.44, 0.90),
+            (0.74, 0.84),
+            (0.88, 0.66),
+        ],
+        &[
+            (0.90, 0.42),
+            (0.70, 0.14),
+            (0.36, 0.12),
+            (0.12, 0.34),
+            (0.10, 0.64),
+            (0.28, 0.88),
+            (0.62, 0.90),
+            (0.84, 0.72),
+        ],
+        &[
+            (0.94, 0.52),
+            (0.80, 0.24),
+            (0.54, 0.12),
+            (0.24, 0.18),
+            (0.10, 0.42),
+            (0.14, 0.72),
+            (0.38, 0.88),
+            (0.68, 0.86),
+            (0.86, 0.70),
+        ],
+    ];
+    let craters: [&[(f32, f32, f32)]; 3] = [
+        &[(0.62, 0.38, 0.13), (0.34, 0.60, 0.10), (0.56, 0.68, 0.08)],
+        &[(0.42, 0.38, 0.14), (0.64, 0.60, 0.11), (0.30, 0.64, 0.07)],
+        &[(0.58, 0.44, 0.12), (0.34, 0.42, 0.09), (0.50, 0.70, 0.10)],
+    ];
+    let s = size as f32;
+    let poly: Vec<(f32, f32)> = profiles[variant % 3]
+        .iter()
+        .map(|(x, y)| (x * s, y * s))
+        .collect();
+
+    for y in 0..size {
+        for x in 0..size {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            if !point_in_polygon((px, py), &poly) {
+                continue;
+            }
+            let nx = (px / s) - 0.5;
+            let ny = (py / s) - 0.5;
+            let dist = (nx * nx + ny * ny).sqrt();
+            // Directional shading from upper-right (+x, -y) plus faceted grain
+            let light = (0.68 + nx * 0.45 - ny * 0.35 - dist * 0.35).clamp(0.28, 1.0);
+            let grain = (((x.wrapping_mul(17) ^ y.wrapping_mul(31)) & 7) as f32 - 3.5) * 3.0;
+            let mut r = (168.0 * light + grain).clamp(40.0, 220.0);
+            let mut g = (152.0 * light + grain).clamp(36.0, 205.0);
+            let mut b = (136.0 * light + grain).clamp(32.0, 190.0);
+
+            for &(cx, cy, cr) in craters[variant % 3] {
+                let cdx = (px / s) - cx;
+                let cdy = (py / s) - cy;
+                let cdist = (cdx * cdx + cdy * cdy).sqrt();
+                if cdist < cr {
+                    let rim = cdist / cr;
+                    let factor = if rim > 0.78 { 1.12 } else { 0.58 + 0.25 * rim };
+                    r *= factor;
+                    g *= factor;
+                    b *= factor;
+                }
+            }
+
+            let index = ((y * size + x) * 4) as usize;
+            data[index] = r as u8;
+            data[index + 1] = g as u8;
+            data[index + 2] = b as u8;
+            data[index + 3] = 255;
+        }
+    }
+    image_from_rgba(size, data)
 }
 
 fn chief_image(size: u32) -> Image {

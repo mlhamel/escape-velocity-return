@@ -11,10 +11,10 @@ use bevy_replicon_renet2::netcode::{
 use bevy_replicon_renet2::renet2::{ConnectionConfig, RenetClient, RenetServer};
 use bevy_replicon_renet2::{RenetChannelsExt, RepliconRenetPlugins};
 use evr_protocol::{
-    AccountState, ActiveQuests, BuyCommodity, ChiefEncounter, ChiefMood, DockedAt, Hull, Notice,
-    PlanetTag, PlayerDied, Position, Projectile, QuestTarget, RequestLand, RequestLiftOff,
-    RespondToEncounter, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp, ShipInfo,
-    ShipKind, SystemMembership,
+    AccountState, ActiveQuests, BuyCommodity, ChiefEncounter, ChiefMood, DockedAt, Heading, Hull,
+    Meteorite, Notice, PlanetTag, PlayerDied, Position, Projectile, QuestTarget, RequestLand,
+    RequestLiftOff, RespondToEncounter, SellCommodity, SetFiring, SetThrottle, SetTurn, SetWarp,
+    ShipInfo, ShipKind, SystemMembership,
 };
 use evr_server::{
     Content, EMBEDDED_CLIENT_ID, TickMode, attach_memory, build_server_app,
@@ -429,6 +429,29 @@ impl Harness {
                 .collect::<Vec<_>>()
         };
 
+        let meteorites = {
+            let mut state =
+                self.server
+                    .world_mut()
+                    .query::<(&Meteorite, &Position, &Heading, &SystemMembership)>();
+            let world = self.server.world();
+            state
+                .iter(world)
+                .filter(|(_, _, _, membership)| membership.0 == system)
+                .map(|(m, position, heading, _)| {
+                    serde_json::json!({
+                        "size": m.size.as_str(),
+                        "position": [position.0.x, position.0.y],
+                        "heading": heading.0,
+                        "hp": m.hp,
+                        "max_hp": m.max_hp,
+                        "spin_rate": m.spin_rate,
+                        "spinning": m.spin_rate.abs() > 0.0,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+
         let projectile_count = {
             let mut state = self.server.world_mut().query::<&Projectile>();
             let world = self.server.world();
@@ -460,6 +483,7 @@ impl Harness {
             },
             "planets": planets,
             "ships": ships,
+            "meteorites": meteorites,
             "market": market,
             "encounter": encounter_json,
             "quests": quests_json,

@@ -14,4 +14,4 @@ pub use outfit::{OutfitDef, OutfitKind, WeaponDef};
 pub use quest::{QuestDef, QuestKind};
 pub use scenario::{ScenarioDef, ScenarioStep};
 pub use ship::ShipDef;
-pub use system::{ChiefDef, CommodityPrice, PlanetDef, SystemDef};
+pub use system::{ChiefDef, CommodityPrice, MeteoriteFieldDef, PlanetDef, SystemDef};

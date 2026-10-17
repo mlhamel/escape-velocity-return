@@ -126,6 +126,64 @@ pub struct ActiveQuests {
     pub completed: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MeteoriteSize {
+    Large,
+    Medium,
+    Small,
+}
+
+impl MeteoriteSize {
+    pub const fn radius(self) -> f32 {
+        match self {
+            Self::Large => 28.0,
+            Self::Medium => 17.0,
+            Self::Small => 10.0,
+        }
+    }
+
+    pub const fn max_hp(self) -> f32 {
+        match self {
+            Self::Large => 27.0,
+            Self::Medium => 18.0,
+            Self::Small => 9.0,
+        }
+    }
+
+    pub const fn collision_damage(self) -> f32 {
+        match self {
+            Self::Large => 18.0,
+            Self::Medium => 10.0,
+            Self::Small => 5.0,
+        }
+    }
+
+    pub const fn child_size(self) -> Option<Self> {
+        match self {
+            Self::Large => Some(Self::Medium),
+            Self::Medium => Some(Self::Small),
+            Self::Small => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Large => "large",
+            Self::Medium => "medium",
+            Self::Small => "small",
+        }
+    }
+}
+
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Meteorite {
+    pub size: MeteoriteSize,
+    pub hp: f32,
+    pub max_hp: f32,
+    pub spin_rate: f32,
+    pub variant: u8,
+}
+
 #[derive(Event, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetThrottle(pub f32);
 
@@ -205,6 +263,7 @@ pub fn register(app: &mut App) {
         .replicate::<AccountState>()
         .replicate::<ChiefEncounter>()
         .replicate::<ActiveQuests>()
+        .replicate::<Meteorite>()
         .add_client_event::<SetThrottle>(Channel::Ordered)
         .add_client_event::<SetTurn>(Channel::Ordered)
         .add_client_event::<SetFiring>(Channel::Ordered)
@@ -279,6 +338,13 @@ mod tests {
                 remaining_secs: Some(120.0),
             }],
             completed: vec!["old-quest".into()],
+        });
+        roundtrip(Meteorite {
+            size: MeteoriteSize::Large,
+            hp: 27.0,
+            max_hp: 27.0,
+            spin_rate: 1.25,
+            variant: 2,
         });
     }
 

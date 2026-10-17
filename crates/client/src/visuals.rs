@@ -4,7 +4,9 @@ use crate::textures::Textures;
 use bevy::color::Mix;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
-use evr_protocol::{Explosion, Heading, Hull, PlanetTag, Position, Projectile, ShipInfo, ShipKind};
+use evr_protocol::{
+    Explosion, Heading, Hull, Meteorite, PlanetTag, Position, Projectile, ShipInfo, ShipKind,
+};
 
 const FLASH_SECS: f32 = 0.18;
 
@@ -18,12 +20,15 @@ impl Plugin for VisualsPlugin {
                 attach_ship_visuals,
                 attach_planet_visuals,
                 attach_projectile_visuals,
+                attach_meteorite_visuals,
                 detect_hits,
+                detect_meteorite_hits,
                 tick_flashes,
                 debris_flight,
                 sync_ship_transforms,
                 sync_planet_transforms,
                 sync_projectile_transforms,
+                sync_meteorite_transforms,
                 parallax,
                 camera_follow,
             )
@@ -40,6 +45,9 @@ struct PlanetVisual;
 
 #[derive(Component)]
 struct ProjectileVisual;
+
+#[derive(Component)]
+struct MeteoriteVisual;
 
 #[derive(Component)]
 struct FlashState {
@@ -149,6 +157,32 @@ fn attach_projectile_visuals(
     }
 }
 
+type AddedMeteorites<'w, 's> =
+    Query<'w, 's, (Entity, &'static Meteorite), (Added<Meteorite>, With<Remote>)>;
+
+fn attach_meteorite_visuals(
+    mut commands: Commands,
+    textures: Res<Textures>,
+    added: AddedMeteorites,
+) {
+    for (entity, meteorite) in &added {
+        let variant_idx = (meteorite.variant as usize) % textures.meteorites.len();
+        let mut sprite = Sprite::from_image(textures.meteorites[variant_idx].clone());
+        sprite.color = Color::WHITE;
+        sprite.custom_size = Some(Vec2::splat(meteorite.size.radius() * 2.2));
+        commands.entity(entity).insert((
+            MeteoriteVisual,
+            sprite,
+            FlashState {
+                base_color: Color::WHITE,
+                last_shields: meteorite.hp,
+                last_armor: meteorite.hp,
+                remaining: 0.0,
+            },
+        ));
+    }
+}
+
 fn detect_hits(mut ships: Query<(&Hull, &mut FlashState), With<ShipVisual>>) {
     for (hull, mut flash) in &mut ships {
         if hull.shields < flash.last_shields || hull.armor < flash.last_armor {
@@ -159,12 +193,21 @@ fn detect_hits(mut ships: Query<(&Hull, &mut FlashState), With<ShipVisual>>) {
     }
 }
 
-fn tick_flashes(
-    time: Res<Time>,
-    mut ships: Query<(&mut FlashState, &mut Sprite), With<ShipVisual>>,
+fn detect_meteorite_hits(
+    mut meteorites: Query<(&Meteorite, &mut FlashState), With<MeteoriteVisual>>,
 ) {
+    for (meteorite, mut flash) in &mut meteorites {
+        if meteorite.hp < flash.last_armor {
+            flash.remaining = FLASH_SECS;
+        }
+        flash.last_shields = meteorite.hp;
+        flash.last_armor = meteorite.hp;
+    }
+}
+
+fn tick_flashes(time: Res<Time>, mut flashing: Query<(&mut FlashState, &mut Sprite)>) {
     let dt = time.delta_secs();
-    for (mut flash, mut sprite) in &mut ships {
+    for (mut flash, mut sprite) in &mut flashing {
         if flash.remaining > 0.0 {
             flash.remaining = (flash.remaining - dt).max(0.0);
             let factor = flash.remaining / FLASH_SECS;
@@ -229,6 +272,15 @@ fn sync_projectile_transforms(
 ) {
     for (position, heading, mut transform) in &mut projectiles {
         transform.translation = position.0.extend(0.0);
+        transform.rotation = Quat::from_rotation_z(heading.0);
+    }
+}
+
+fn sync_meteorite_transforms(
+    mut meteorites: Query<(&Position, &Heading, &mut Transform), With<MeteoriteVisual>>,
+) {
+    for (position, heading, mut transform) in &mut meteorites {
+        transform.translation = position.0.extend(-1.0);
         transform.rotation = Quat::from_rotation_z(heading.0);
     }
 }

@@ -15,7 +15,7 @@ fn base_pack_loads() {
     assert_eq!(pack.systems.len(), 11);
     assert_eq!(pack.outfits.len(), 1);
     assert_eq!(pack.quests.len(), 4);
-    assert_eq!(pack.scenarios.len(), 3);
+    assert_eq!(pack.scenarios.len(), 4);
 
     let shuttle = pack.ship("shuttle").expect("shuttle exists");
     assert_eq!(shuttle.name, "Shuttle");
@@ -26,6 +26,7 @@ fn base_pack_loads() {
     assert_eq!(sol.planets.len(), 1);
     assert_eq!(sol.planets[0].commodities.len(), 3);
     assert!(sol.planets[0].chief.is_some());
+    assert!(sol.meteorites.is_some());
     assert!(sol.links.contains(&"alpha-centauri".to_owned()));
     assert!(sol.links.contains(&"vega".to_owned()));
 

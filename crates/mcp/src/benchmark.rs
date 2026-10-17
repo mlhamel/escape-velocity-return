@@ -385,6 +385,176 @@ fn execute_step(
             *assertions_passed += 1;
             Ok(())
         }
+        ScenarioStep::ClearMeteorites => {
+            let state = harness.observe();
+            let sys = state["system"].as_str().unwrap_or("sol").to_owned();
+            let entities: Vec<bevy::prelude::Entity> = harness
+                .server
+                .world_mut()
+                .query_filtered::<(bevy::prelude::Entity, &evr_protocol::SystemMembership), bevy::prelude::With<evr_protocol::Meteorite>>()
+                .iter(harness.server.world())
+                .filter(|(_, m)| m.0 == sys)
+                .map(|(e, _)| e)
+                .collect();
+            for entity in entities {
+                harness.server.world_mut().despawn(entity);
+            }
+            advance_tracking(
+                harness,
+                2,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::SpawnMeteorite {
+            size,
+            offset,
+            velocity,
+        } => {
+            let parsed_size = match size.as_str() {
+                "large" => evr_protocol::MeteoriteSize::Large,
+                "medium" => evr_protocol::MeteoriteSize::Medium,
+                "small" => evr_protocol::MeteoriteSize::Small,
+                other => return Err(format!("unknown meteorite size '{other}'")),
+            };
+            let state = harness.observe();
+            let sys = state["system"].as_str().unwrap_or("sol").to_owned();
+            let pos_arr = state["ship"]["position"]
+                .as_array()
+                .ok_or_else(|| "missing ship.position".to_owned())?;
+            let ship_pos = bevy::math::Vec2::new(
+                pos_arr[0].as_f64().unwrap_or(0.0) as f32,
+                pos_arr[1].as_f64().unwrap_or(0.0) as f32,
+            );
+            let spawn_pos = ship_pos + bevy::math::Vec2::new(offset.0, offset.1);
+            let vel = bevy::math::Vec2::new(velocity.0, velocity.1);
+            let spin = if vel.length_squared() > 0.0 { 1.4 } else { 0.0 };
+            let mut cmds = harness.server.world_mut().commands();
+            evr_server::gameplay::spawn_meteorite(
+                &mut cmds,
+                &sys,
+                ship_pos,
+                1200.0,
+                spawn_pos,
+                vel,
+                parsed_size,
+                spin,
+                0,
+            );
+            harness.server.world_mut().flush();
+            advance_tracking(
+                harness,
+                2,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::DestroyNearestMeteorite => {
+            let state = harness.observe();
+            let sys = state["system"].as_str().unwrap_or("sol").to_owned();
+            let pos_arr = state["ship"]["position"]
+                .as_array()
+                .ok_or_else(|| "missing ship.position".to_owned())?;
+            let ship_pos = bevy::math::Vec2::new(
+                pos_arr[0].as_f64().unwrap_or(0.0) as f32,
+                pos_arr[1].as_f64().unwrap_or(0.0) as f32,
+            );
+            let target_entity = {
+                let mut q = harness.server.world_mut().query::<(
+                    bevy::prelude::Entity,
+                    &Position,
+                    &evr_protocol::SystemMembership,
+                    &evr_protocol::Meteorite,
+                )>();
+                let world = harness.server.world();
+                q.iter(world)
+                    .filter(|(_, _, m, _)| m.0 == sys)
+                    .min_by_key(|(_, pos, _, met)| {
+                        let tier_rank = match met.size {
+                            evr_protocol::MeteoriteSize::Large => 0_u8,
+                            evr_protocol::MeteoriteSize::Medium => 1_u8,
+                            evr_protocol::MeteoriteSize::Small => 2_u8,
+                        };
+                        (tier_rank, pos.0.distance(ship_pos).to_bits())
+                    })
+                    .map(|(e, _, _, _)| e)
+                    .ok_or_else(|| "no meteorite found in current system".to_owned())?
+            };
+            let heading = state["ship"]["heading"].as_f64().unwrap_or(0.0) as f32;
+            let forward = bevy::math::Vec2::new(heading.cos(), heading.sin());
+            if let Some(mut pos) = harness
+                .server
+                .world_mut()
+                .get_mut::<Position>(target_entity)
+            {
+                pos.0 = ship_pos + forward * 85.0;
+            }
+            if let Some(mut motion) =
+                harness
+                    .server
+                    .world_mut()
+                    .get_mut::<evr_server::gameplay::MeteoriteMotion>(target_entity)
+            {
+                motion.velocity = bevy::math::Vec2::ZERO;
+            }
+            harness.set_flight(0.0, 0.0, true);
+            let max_steps = remaining_budget.max(1);
+            let mut destroyed = false;
+            for _ in 0..max_steps {
+                advance_tracking(
+                    harness,
+                    1,
+                    prev_fuel,
+                    prev_hull,
+                    fuel_consumed,
+                    hull_damage_taken,
+                );
+                if harness.server.world().get_entity(target_entity).is_err() {
+                    destroyed = true;
+                    break;
+                }
+            }
+            harness.set_flight(0.0, 0.0, false);
+            let projs: Vec<bevy::prelude::Entity> = harness
+                .server
+                .world_mut()
+                .query_filtered::<bevy::prelude::Entity, bevy::prelude::With<evr_protocol::Projectile>>()
+                .iter(harness.server.world())
+                .collect();
+            for p in projs {
+                harness.server.world_mut().despawn(p);
+            }
+            if !destroyed {
+                return Err("timed out firing at nearest meteorite".to_owned());
+            }
+            Ok(())
+        }
+        ScenarioStep::AssertMeteorites { count, size } => {
+            let state = harness.observe();
+            let arr = state["meteorites"]
+                .as_array()
+                .ok_or_else(|| "missing meteorites array in observe()".to_owned())?;
+            let actual = match size {
+                Some(s) => arr
+                    .iter()
+                    .filter(|m| m["size"].as_str() == Some(s.as_str()))
+                    .count(),
+                None => arr.len(),
+            };
+            if actual != *count {
+                return Err(format!(
+                    "expected {count} meteorites (size={size:?}), got {actual}"
+                ));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
     }
 }
 

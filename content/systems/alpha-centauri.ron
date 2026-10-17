@@ -26,4 +26,11 @@
             ],
         ),
     ],
+    meteorites: Some((
+        count: 12,
+        radius: 1200.0,
+        stationary_weight: 2,
+        slow_weight: 5,
+        fast_weight: 4,
+    )),
 )

@@ -176,4 +176,11 @@ All design decisions below align with
 
 ## Status
 
-- 2026-10-17: ADR-0010 and `meteorite-fields` skill created. Ready for Phase 2–5 implementation.
+- 2026-10-17: ADR-0010 and `meteorite-fields` skill created (`0bb17fc`).
+- 2026-10-17: Phases 2–5 implemented and verified:
+  - **Core (`crates/core`)**: Added `MeteoriteTier::{Large, Medium, Small}` and `split_meteorite_velocities` with unit tests.
+  - **Content (`crates/data`, `content/systems/`)**: Added `MeteoriteFieldDef` on `SystemDef`, loader validation, and meteorite belt definitions in `sol.ron` and `alpha-centauri.ron`.
+  - **Protocol (`crates/protocol`)**: Added `MeteoriteSize` and replicated `Meteorite` component (`size`, `hp`, `max_hp`, `spin_rate`, `variant`).
+  - **Server (`crates/server`)**: Added `MeteoriteMotion`, `spawn_meteorite`, belt spawning in `spawn_world`, `meteorite_movement` (drift + self-spin when moving), `projectile_hits` recursive binary fragmentation (`1 -> 2 -> 4 -> 0`), and `meteorite_ship_collisions` (undocked ship hull damage + rebound).
+  - **Client (`crates/client`)**: Added 3 cratered rock texture variants in `textures.rs` and `MeteoriteVisual` attachment, hit-flash feedback, and rotation sync in `visuals.rs`.
+  - **MCP & Benchmark (`crates/mcp`, `content/scenarios/`)**: Added `"meteorites"` array to `Harness::observe()`, added `ClearMeteorites`, `SpawnMeteorite`, `DestroyNearestMeteorite`, and `AssertMeteorites` scenario steps, and added `content/scenarios/meteorite-fragmentation.ron`.
