@@ -43,6 +43,7 @@ struct ProjectileVisual;
 
 #[derive(Component)]
 struct FlashState {
+    base_color: Color,
     last_shields: f32,
     last_armor: f32,
     remaining: f32,
@@ -76,21 +77,22 @@ fn attach_ship_visuals(
     added: AddedShips,
 ) {
     for (entity, info, hull) in &added {
-        let image = match content
+        let (image, base_color) = match content
             .0
             .ship(&info.def_id)
             .and_then(|def| def.sprite.clone())
         {
-            Some(path) => asset_server.load(path),
-            None => textures.ship.clone(),
+            Some(path) => (asset_server.load(path), Color::WHITE),
+            None => (textures.ship.clone(), kind_color(info.kind)),
         };
         let mut sprite = Sprite::from_image(image);
-        sprite.color = kind_color(info.kind);
-        sprite.custom_size = Some(Vec2::new(30.0, 30.0));
+        sprite.color = base_color;
+        sprite.custom_size = Some(Vec2::new(44.0, 44.0));
         commands.entity(entity).insert((
             ShipVisual,
             sprite,
             FlashState {
+                base_color,
                 last_shields: hull.shields,
                 last_armor: hull.armor,
                 remaining: 0.0,
@@ -159,14 +161,16 @@ fn detect_hits(mut ships: Query<(&Hull, &mut FlashState), With<ShipVisual>>) {
 
 fn tick_flashes(
     time: Res<Time>,
-    mut ships: Query<(&mut FlashState, &ShipInfo, &mut Sprite), With<ShipVisual>>,
+    mut ships: Query<(&mut FlashState, &mut Sprite), With<ShipVisual>>,
 ) {
     let dt = time.delta_secs();
-    for (mut flash, info, mut sprite) in &mut ships {
+    for (mut flash, mut sprite) in &mut ships {
         if flash.remaining > 0.0 {
             flash.remaining = (flash.remaining - dt).max(0.0);
             let factor = flash.remaining / FLASH_SECS;
-            sprite.color = kind_color(info.kind).mix(&Color::WHITE, factor);
+            sprite.color = flash.base_color.mix(&Color::srgb(2.0, 0.45, 0.35), factor);
+        } else {
+            sprite.color = flash.base_color;
         }
     }
 }

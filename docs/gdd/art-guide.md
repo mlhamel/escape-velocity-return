@@ -21,12 +21,12 @@ the names and sizes, and the game picks them up automatically.
 
 | Kind | Path | Size | Notes |
 |---|---|---|---|
-| Ship | `assets/textures/ships/<ship-id>.png` | 128×128 | **Faces +x (east).** Draw in light/white — ships are tinted per faction (player cyan, pirate red) |
+| Ship | `assets/textures/ships/<ship-id>.png` | 128×128 | **Faces +x (east).** Full-color pre-rendered top-down sprite on transparent background (`shuttle.png`, `turncoat.png`, `patrol.png`) |
 | Planet | `assets/textures/planets/<planet-id>.png` | 128×128 | Natural colors; no tint applied |
 | Chief | `assets/textures/chiefs/<planet-id>.png` | 128×128 | Bust portrait on dark/transparent background; displayed in the docking encounter panel |
 
 - RGBA PNG, transparent background
-- Ship sprites render at ~30 px world size; planets at `radius * 2`
+- Ship sprites render at ~44 px world size in natural colors (fallback untextured hulls use faction-tinted 24×12 rectangles); planets at `radius * 2`
 - File name should match the content id — makes replacement obvious
 
 ## Skies

@@ -122,13 +122,23 @@ def chief(buffer, coat_color, accent_color):
     fill_polygon(buffer, visor, accent_color + (255,))
 
 
+def write_if_missing(path, width, height, pixels, force=False):
+    if os.path.exists(path) and not force:
+        print(f"kept existing {path} (pass --force to overwrite)")
+        return
+    write_png(path, width, height, pixels)
+
+
 def main():
+    import sys
+
+    force = "--force" in sys.argv[1:]
     root = os.path.join(os.path.dirname(__file__), "..", "assets", "textures")
 
     ship_pixels = [0] * (SIZE * SIZE * 4)
     ship(ship_pixels)
-    write_png(os.path.join(root, "ships", "shuttle.png"), SIZE, SIZE, bytes(ship_pixels))
-    write_png(os.path.join(root, "ships", "turncoat.png"), SIZE, SIZE, bytes(ship_pixels))
+    for ship_name in ("shuttle.png", "turncoat.png", "patrol.png"):
+        write_if_missing(os.path.join(root, "ships", ship_name), SIZE, SIZE, bytes(ship_pixels), force)
 
     for name, base in [
         ("earth.png", (46, 96, 168)),
@@ -136,7 +146,7 @@ def main():
     ]:
         planet_pixels = [0] * (SIZE * SIZE * 4)
         planet(planet_pixels, base)
-        write_png(os.path.join(root, "planets", name), SIZE, SIZE, bytes(planet_pixels))
+        write_if_missing(os.path.join(root, "planets", name), SIZE, SIZE, bytes(planet_pixels), force)
 
     for name, coat, accent in [
         ("earth.png", (48, 88, 150), (210, 175, 75)),
@@ -144,7 +154,7 @@ def main():
     ]:
         chief_pixels = [0] * (SIZE * SIZE * 4)
         chief(chief_pixels, coat, accent)
-        write_png(os.path.join(root, "chiefs", name), SIZE, SIZE, bytes(chief_pixels))
+        write_if_missing(os.path.join(root, "chiefs", name), SIZE, SIZE, bytes(chief_pixels), force)
 
 
 if __name__ == "__main__":
