@@ -1,0 +1,18 @@
+from_latest_tag = false
+ignore_merge_commits = true
+ignore_fixup_commits = true
+branch_whitelist = ["main"]
+
+[git_hooks.commit-msg]
+script = """#!/bin/sh
+set -e
+cog verify --file "$1"
+"""
+
+[commit_types]
+
+[changelog]
+path = "CHANGELOG.md"
+authors = [
+    { signature = "Mathieu Leduc-Hamel", username = "mlhamel" },
+]

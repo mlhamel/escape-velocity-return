@@ -11,6 +11,7 @@ single-player.
 - test: `cargo test --workspace` (single crate: `cargo test -p evr-core`)
 - lint: `cargo clippy --workspace -- -D warnings`
 - format: `cargo fmt --all` (check: `cargo fmt --all --check`)
+- commit check: `cog check` or `make commit-check` (install git hooks: `make hooks` / `cog install-hook --all`)
 - run server: `cargo run -p evr-server [port] [--storage path.db]` (standalone shard; UDP, defaults to 3456; SQLite persistence with --storage)
 - run client online: `cargo run -p evr-client -- --connect host:port [--username name] [--password pw]`
 - run client: `cargo run -p evr-client` (desktop session required)
@@ -52,4 +53,6 @@ single-player.
 - In-game text follows `docs/gdd/writing-style.md`.
 - History lives in git: ADRs for decisions, `docs/ideas/` for everything considered.
   Never delete an idea; re-status it.
+- All git commit messages must follow Conventional Commits (`<type>[optional scope]: <description>`),
+  enforced via Cocogitto (`cog.toml`, `.githooks/commit-msg`, and GitHub Actions).
 - No unsafe code (workspace lint).

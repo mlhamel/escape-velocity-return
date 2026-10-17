@@ -1,0 +1,22 @@
+name: Conventional Commits
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  commit-check:
+    name: Cocogitto Commit Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check Conventional Commits
+        uses: cocogitto/cocogitto-action@v4
+        with:
+          check-latest-tag-only: false

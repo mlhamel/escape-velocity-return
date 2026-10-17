@@ -13,7 +13,7 @@ PASS    ?= secret
 .PHONY: help \
 	build build-release build-core build-data build-protocol build-server build-client build-mcp \
 	test test-core test-data test-protocol test-server test-mcp test-playthrough \
-	check lint clippy fmt fmt-check \
+	check lint clippy fmt fmt-check commit-check hooks \
 	run run-client run-online run-server run-server-ephemeral run-mcp \
 	tour capture-tour art placeholder-art clean
 
@@ -23,6 +23,10 @@ help: ## Show available targets and configurable variables
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m [PORT=3456] [DB=shard.db] [HOST=127.0.0.1:3456] [USER=pilot] [PASS=secret]\n"} \
 		/^[a-zA-Z0-9_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 } \
 		/^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+hooks: ## Configure git to use tracked hooks in .githooks/ (and install cocogitto hook if cog is present)
+	chmod +x .githooks/commit-msg
+	git config core.hooksPath .githooks
 
 ##@ Build Targets
 
@@ -52,7 +56,14 @@ build-mcp: ## Build evr-mcp (MCP agent server)
 
 ##@ Testing & Verification
 
-check: fmt-check lint test ## Run full verification suite (fmt-check + clippy + workspace tests)
+check: fmt-check lint commit-check test ## Run full verification suite (fmt-check + clippy + commit-check + workspace tests)
+
+commit-check: ## Verify git history follows Conventional Commits (via cocogitto)
+	@if command -v cog >/dev/null 2>&1; then \
+		cog check; \
+	else \
+		git log --format=%s | grep -Ev '^(Merge|Revert|fixup!|squash!) ' | grep -Ev '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_,./-]+\))?!?: .+' && { echo "Non-conventional commits found!" >&2; exit 1; } || echo "All commits follow Conventional Commits."; \
+	fi
 
 test: ## Run all unit and integration tests across the workspace
 	$(CARGO) test --workspace
