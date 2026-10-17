@@ -1,0 +1,21 @@
+ScenarioDef(
+    id: "sol-centauri-trade",
+    name: "Sol to Alpha Centauri Trade Run",
+    description: "Dock on Earth, buy food, warp to Alpha Centauri, dock on Newhaven, and sell food for a profit.",
+    max_ticks: 2500,
+    steps: [
+        AssertAlive(true),
+        AssertSystem("sol"),
+        FlyToPlanet(system: "sol", planet: "earth", land: true),
+        AssertDocked(Some("earth")),
+        Trade(action: "buy", commodity: "food", qty: 15),
+        AssertCargo(commodity: "food", min_qty: 15),
+        LiftOff,
+        AssertDocked(None),
+        FlyToPlanet(system: "alpha-centauri", planet: "newhaven", land: true),
+        AssertSystem("alpha-centauri"),
+        AssertDocked(Some("newhaven")),
+        Trade(action: "sell", commodity: "food", qty: 15),
+        AssertCredits(min: Some(530), max: None),
+    ],
+)

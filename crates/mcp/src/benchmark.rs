@@ -1,0 +1,594 @@
+use std::f64::consts::PI;
+use std::path::Path;
+
+use evr_data::{ContentPack, ScenarioDef, ScenarioStep};
+use evr_protocol::{PlanetTag, Position};
+use evr_server::Content;
+use evr_server::gameplay::EncounterRng;
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::harness::{Harness, TickSample};
+
+const SETTLE_TICKS: u32 = 15;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScenarioReport {
+    pub id: String,
+    pub name: String,
+    pub passed: bool,
+    pub error: Option<String>,
+    pub total_ticks: u64,
+    pub assertions_passed: usize,
+    pub avg_tick_us: u64,
+    pub p50_tick_us: u64,
+    pub p95_tick_us: u64,
+    pub p99_tick_us: u64,
+    pub max_tick_us: u64,
+    pub server_avg_us: u64,
+    pub client_avg_us: u64,
+    pub peak_server_entities: usize,
+    pub peak_client_entities: usize,
+    pub peak_projectiles: usize,
+    pub credits_delta: i64,
+    pub fuel_consumed: f32,
+    pub hull_damage_taken: f32,
+    pub quests_completed: usize,
+}
+
+pub fn run_scenarios(
+    content_root: &Path,
+    filter_id: Option<&str>,
+) -> Result<Vec<ScenarioReport>, String> {
+    let pack = ContentPack::load_dir(content_root)
+        .map_err(|err| format!("failed to load content pack: {err}"))?;
+    let scenarios: Vec<&ScenarioDef> = match filter_id {
+        Some(id) => {
+            let def = pack
+                .scenario(id)
+                .ok_or_else(|| format!("unknown scenario '{id}'"))?;
+            vec![def]
+        }
+        None => pack.scenarios.iter().collect(),
+    };
+    Ok(scenarios
+        .into_iter()
+        .map(|def| run_scenario(content_root, def))
+        .collect())
+}
+
+pub fn run_scenario(content_root: &Path, def: &ScenarioDef) -> ScenarioReport {
+    let mut harness = Harness::new(content_root);
+    if let Some(seed) = def.encounter_seed {
+        harness
+            .server
+            .insert_resource(EncounterRng::with_roll(seed as u32));
+    }
+
+    let initial = harness.observe();
+    let initial_credits = initial["ship"]["credits"].as_i64().unwrap_or(0);
+    let mut prev_fuel = initial["ship"]["fuel"].as_f64().unwrap_or(0.0) as f32;
+    let mut prev_hull = (initial["ship"]["shields"].as_f64().unwrap_or(0.0)
+        + initial["ship"]["armor"].as_f64().unwrap_or(0.0)) as f32;
+    let mut fuel_consumed = 0.0_f32;
+    let mut hull_damage_taken = 0.0_f32;
+    let mut assertions_passed = 0_usize;
+    let mut error: Option<String> = None;
+
+    for (idx, step) in def.steps.iter().enumerate() {
+        if harness.ticks > def.max_ticks {
+            error = Some(format!(
+                "step {}: exceeded max_ticks ({} > {})",
+                idx + 1,
+                harness.ticks,
+                def.max_ticks
+            ));
+            break;
+        }
+        let remaining_budget = def.max_ticks.saturating_sub(harness.ticks) as u32;
+        if let Err(msg) = execute_step(
+            &mut harness,
+            step,
+            remaining_budget,
+            &mut assertions_passed,
+            &mut prev_fuel,
+            &mut prev_hull,
+            &mut fuel_consumed,
+            &mut hull_damage_taken,
+        ) {
+            error = Some(format!("step {} ({step:?}): {msg}", idx + 1));
+            break;
+        }
+    }
+
+    let final_state = harness.observe();
+    update_resource_deltas(
+        &final_state,
+        &mut prev_fuel,
+        &mut prev_hull,
+        &mut fuel_consumed,
+        &mut hull_damage_taken,
+    );
+    let final_credits = final_state["ship"]["credits"]
+        .as_i64()
+        .unwrap_or(initial_credits);
+    let quests_completed = final_state["completed_quests"]
+        .as_array()
+        .map_or(0, Vec::len);
+
+    let stats = compute_sample_stats(&harness.samples);
+
+    ScenarioReport {
+        id: def.id.clone(),
+        name: def.name.clone(),
+        passed: error.is_none(),
+        error,
+        total_ticks: harness.ticks,
+        assertions_passed,
+        avg_tick_us: stats.avg_us,
+        p50_tick_us: stats.p50_us,
+        p95_tick_us: stats.p95_us,
+        p99_tick_us: stats.p99_us,
+        max_tick_us: stats.max_us,
+        server_avg_us: stats.server_avg_us,
+        client_avg_us: stats.client_avg_us,
+        peak_server_entities: stats.peak_server_entities,
+        peak_client_entities: stats.peak_client_entities,
+        peak_projectiles: stats.peak_projectiles,
+        credits_delta: final_credits - initial_credits,
+        fuel_consumed,
+        hull_damage_taken,
+        quests_completed,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_step(
+    harness: &mut Harness,
+    step: &ScenarioStep,
+    remaining_budget: u32,
+    assertions_passed: &mut usize,
+    prev_fuel: &mut f32,
+    prev_hull: &mut f32,
+    fuel_consumed: &mut f32,
+    hull_damage_taken: &mut f32,
+) -> Result<(), String> {
+    match step {
+        ScenarioStep::SetFlight {
+            throttle,
+            turn,
+            fire,
+        } => {
+            harness.set_flight(*throttle, *turn, *fire);
+            advance_tracking(
+                harness,
+                SETTLE_TICKS,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::SetWarp(on) => {
+            harness.set_warp(*on);
+            advance_tracking(
+                harness,
+                SETTLE_TICKS,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::Advance { ticks } => {
+            advance_tracking(
+                harness,
+                *ticks,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::FlyToPlanet {
+            system,
+            planet,
+            land,
+        } => {
+            let target = planet_world_pos(harness, system, planet)
+                .ok_or_else(|| format!("planet {system}/{planet} not found in server world"))?;
+            fly_to_point(
+                harness,
+                target,
+                240.0,
+                remaining_budget,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            )?;
+            if *land {
+                harness.land(planet);
+                advance_tracking(
+                    harness,
+                    SETTLE_TICKS,
+                    prev_fuel,
+                    prev_hull,
+                    fuel_consumed,
+                    hull_damage_taken,
+                );
+            }
+            Ok(())
+        }
+        ScenarioStep::FlyToSystem { system } => {
+            let target = system_world_pos(harness, system)
+                .ok_or_else(|| format!("system {system} not found in content"))?;
+            fly_to_point(
+                harness,
+                target,
+                350.0,
+                remaining_budget,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            )
+        }
+        ScenarioStep::Land { planet } => {
+            harness.land(planet);
+            advance_tracking(
+                harness,
+                SETTLE_TICKS,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::LiftOff => {
+            harness.lift_off();
+            advance_tracking(
+                harness,
+                SETTLE_TICKS,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::Trade {
+            action,
+            commodity,
+            qty,
+        } => {
+            match action.as_str() {
+                "buy" => harness.buy(commodity, *qty),
+                "sell" => harness.sell(commodity, *qty),
+                other => return Err(format!("invalid trade action '{other}'")),
+            }
+            advance_tracking(
+                harness,
+                SETTLE_TICKS,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::Respond { choice } => {
+            harness.respond(choice);
+            advance_tracking(
+                harness,
+                SETTLE_TICKS,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            Ok(())
+        }
+        ScenarioStep::AssertAlive(expected) => {
+            let state = harness.observe();
+            let actual = state["alive"].as_bool().unwrap_or(false);
+            if actual != *expected {
+                return Err(format!("expected alive={expected}, got {actual}"));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+        ScenarioStep::AssertSystem(expected) => {
+            let state = harness.observe();
+            let actual = state["system"].as_str().unwrap_or("");
+            if actual != expected {
+                return Err(format!("expected system='{expected}', got '{actual}'"));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+        ScenarioStep::AssertDocked(expected) => {
+            let state = harness.observe();
+            let actual = state["docked"].as_str().map(str::to_owned);
+            if &actual != expected {
+                return Err(format!("expected docked={expected:?}, got {actual:?}"));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+        ScenarioStep::AssertCredits { min, max } => {
+            let state = harness.observe();
+            let actual = state["ship"]["credits"].as_u64().unwrap_or(0) as u32;
+            if let Some(min_val) = min
+                && actual < *min_val
+            {
+                return Err(format!("expected credits >= {min_val}, got {actual}"));
+            }
+            if let Some(max_val) = max
+                && actual > *max_val
+            {
+                return Err(format!("expected credits <= {max_val}, got {actual}"));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+        ScenarioStep::AssertCargo { commodity, min_qty } => {
+            let state = harness.observe();
+            let actual = state["ship"]["cargo"][commodity.as_str()]
+                .as_u64()
+                .unwrap_or(0) as u32;
+            if actual < *min_qty {
+                return Err(format!(
+                    "expected cargo '{commodity}' >= {min_qty}, got {actual}"
+                ));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+        ScenarioStep::AssertEncounter { mood } => {
+            let state = harness.observe();
+            if state["encounter"].is_null() {
+                return Err("expected active chief encounter, found null".to_owned());
+            }
+            if let Some(expected_mood) = mood {
+                let actual_mood = state["encounter"]["mood"].as_str().unwrap_or("");
+                if actual_mood != expected_mood {
+                    return Err(format!(
+                        "expected encounter mood '{expected_mood}', got '{actual_mood}'"
+                    ));
+                }
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+        ScenarioStep::AssertActiveQuests { count } => {
+            let state = harness.observe();
+            let actual = state["quests"].as_array().map_or(0, Vec::len);
+            if actual != *count {
+                return Err(format!("expected {count} active quests, got {actual}"));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+        ScenarioStep::AssertCompletedQuest(quest_id) => {
+            let state = harness.observe();
+            let completed = state["completed_quests"]
+                .as_array()
+                .is_some_and(|arr| arr.iter().any(|v| v.as_str() == Some(quest_id.as_str())));
+            if !completed {
+                return Err(format!("expected quest '{quest_id}' to be completed"));
+            }
+            *assertions_passed += 1;
+            Ok(())
+        }
+    }
+}
+
+fn advance_tracking(
+    harness: &mut Harness,
+    ticks: u32,
+    prev_fuel: &mut f32,
+    prev_hull: &mut f32,
+    fuel_consumed: &mut f32,
+    hull_damage_taken: &mut f32,
+) {
+    harness.advance(ticks);
+    let state = harness.observe();
+    update_resource_deltas(
+        &state,
+        prev_fuel,
+        prev_hull,
+        fuel_consumed,
+        hull_damage_taken,
+    );
+}
+
+fn update_resource_deltas(
+    state: &Value,
+    prev_fuel: &mut f32,
+    prev_hull: &mut f32,
+    fuel_consumed: &mut f32,
+    hull_damage_taken: &mut f32,
+) {
+    if state["alive"].as_bool() == Some(true) {
+        let fuel = state["ship"]["fuel"].as_f64().unwrap_or(0.0) as f32;
+        if fuel < *prev_fuel {
+            *fuel_consumed += *prev_fuel - fuel;
+        }
+        *prev_fuel = fuel;
+
+        let hull = (state["ship"]["shields"].as_f64().unwrap_or(0.0)
+            + state["ship"]["armor"].as_f64().unwrap_or(0.0)) as f32;
+        if hull < *prev_hull {
+            *hull_damage_taken += *prev_hull - hull;
+        }
+        *prev_hull = hull;
+    }
+}
+
+fn planet_world_pos(harness: &mut Harness, system_id: &str, planet_id: &str) -> Option<[f64; 2]> {
+    let mut query = harness
+        .server
+        .world_mut()
+        .query::<(&PlanetTag, &Position)>();
+    let world = harness.server.world();
+    query
+        .iter(world)
+        .find(|(tag, _)| tag.system == system_id && tag.id == planet_id)
+        .map(|(_, pos)| [f64::from(pos.0.x), f64::from(pos.0.y)])
+}
+
+fn system_world_pos(harness: &Harness, system_id: &str) -> Option<[f64; 2]> {
+    let content = harness.server.world().resource::<Content>();
+    content
+        .0
+        .system(system_id)
+        .map(|s| [f64::from(s.position.0), f64::from(s.position.1)])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fly_to_point(
+    harness: &mut Harness,
+    target: [f64; 2],
+    stop_distance: f64,
+    max_ticks: u32,
+    prev_fuel: &mut f32,
+    prev_hull: &mut f32,
+    fuel_consumed: &mut f32,
+    hull_damage_taken: &mut f32,
+) -> Result<(), String> {
+    let step_chunk = 10_u32;
+    let iterations = (max_ticks / step_chunk).max(1);
+    for _ in 0..iterations {
+        let state = harness.observe();
+        if state["alive"].as_bool() != Some(true) {
+            return Err("ship was destroyed while flying to target".to_owned());
+        }
+        let pos_arr = state["ship"]["position"]
+            .as_array()
+            .ok_or_else(|| "missing ship.position".to_owned())?;
+        let position = [
+            pos_arr[0].as_f64().unwrap_or(0.0),
+            pos_arr[1].as_f64().unwrap_or(0.0),
+        ];
+        let distance = (position[0] - target[0]).hypot(position[1] - target[1]);
+        if distance <= stop_distance {
+            harness.set_flight(0.0, 0.0, false);
+            harness.set_warp(false);
+            advance_tracking(
+                harness,
+                5,
+                prev_fuel,
+                prev_hull,
+                fuel_consumed,
+                hull_damage_taken,
+            );
+            return Ok(());
+        }
+        let heading = state["ship"]["heading"].as_f64().unwrap_or(0.0);
+        let dx = target[0] - position[0];
+        let dy = target[1] - position[1];
+        let desired = dy.atan2(dx);
+        let diff = (desired - heading + PI).rem_euclid(2.0 * PI) - PI;
+        let turn = diff.signum() as f32;
+        let throttle = if diff.abs() < 0.6 { 1.0 } else { 0.2 };
+        let use_warp = distance > 450.0 && diff.abs() < 0.45;
+        harness.set_warp(use_warp);
+        harness.set_flight(throttle, turn, false);
+        advance_tracking(
+            harness,
+            step_chunk,
+            prev_fuel,
+            prev_hull,
+            fuel_consumed,
+            hull_damage_taken,
+        );
+    }
+    harness.set_flight(0.0, 0.0, false);
+    harness.set_warp(false);
+    Err(format!(
+        "timed out flying to ({:.0}, {:.0}) within {max_ticks} ticks",
+        target[0], target[1]
+    ))
+}
+
+#[derive(Default)]
+struct SampleStats {
+    avg_us: u64,
+    p50_us: u64,
+    p95_us: u64,
+    p99_us: u64,
+    max_us: u64,
+    server_avg_us: u64,
+    client_avg_us: u64,
+    peak_server_entities: usize,
+    peak_client_entities: usize,
+    peak_projectiles: usize,
+}
+
+fn compute_sample_stats(samples: &[TickSample]) -> SampleStats {
+    if samples.is_empty() {
+        return SampleStats::default();
+    }
+    let n = samples.len();
+    let mut totals: Vec<u64> = samples.iter().map(|s| s.total_us).collect();
+    totals.sort_unstable();
+
+    let sum_total: u64 = totals.iter().sum();
+    let sum_server: u64 = samples.iter().map(|s| s.server_us).sum();
+    let sum_client: u64 = samples.iter().map(|s| s.client_us).sum();
+
+    let percentile = |p: usize| -> u64 {
+        let idx = ((n - 1) * p) / 100;
+        totals[idx]
+    };
+
+    SampleStats {
+        avg_us: sum_total / n as u64,
+        p50_us: percentile(50),
+        p95_us: percentile(95),
+        p99_us: percentile(99),
+        max_us: *totals.last().unwrap_or(&0),
+        server_avg_us: sum_server / n as u64,
+        client_avg_us: sum_client / n as u64,
+        peak_server_entities: samples.iter().map(|s| s.server_entities).max().unwrap_or(0),
+        peak_client_entities: samples.iter().map(|s| s.client_entities).max().unwrap_or(0),
+        peak_projectiles: samples.iter().map(|s| s.projectiles).max().unwrap_or(0),
+    }
+}
+
+pub fn format_markdown_table(reports: &[ScenarioReport]) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "| Scenario | Status | Ticks | Avg (us) | p50 (us) | p95 (us) | p99 (us) | Max (us) | Entities (S/C/Proj) | Credits | Fuel | Hull Dmg |\n",
+    );
+    out.push_str("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+    for r in reports {
+        let status = if r.passed { "PASS" } else { "FAIL" };
+        out.push_str(&format!(
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} | {}/{}/{} | {:+} | {:.1} | {:.1} |\n",
+            r.id,
+            status,
+            r.total_ticks,
+            r.avg_tick_us,
+            r.p50_tick_us,
+            r.p95_tick_us,
+            r.p99_tick_us,
+            r.max_tick_us,
+            r.peak_server_entities,
+            r.peak_client_entities,
+            r.peak_projectiles,
+            r.credits_delta,
+            r.fuel_consumed,
+            r.hull_damage_taken,
+        ));
+        if let Some(err) = &r.error {
+            out.push_str(&format!("  > Error in `{}`: {}\n", r.id, err));
+        }
+    }
+    out
+}

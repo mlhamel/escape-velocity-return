@@ -261,3 +261,21 @@ fn quest_loop_playthrough() {
         credits_before + 450
     );
 }
+
+#[test]
+fn all_pack_scenarios_pass() {
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let reports = evr_mcp::run_scenarios(&content, None).expect("scenarios must load and run");
+    assert_eq!(reports.len(), 3);
+    println!("\n{}", evr_mcp::format_markdown_table(&reports));
+    for report in &reports {
+        assert!(
+            report.passed,
+            "scenario '{}' failed: {:?}",
+            report.id, report.error
+        );
+        assert!(report.total_ticks > 0);
+        assert!(report.assertions_passed > 0);
+        assert!(report.peak_server_entities > 0);
+    }
+}

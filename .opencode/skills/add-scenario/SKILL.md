@@ -1,0 +1,29 @@
+---
+name: add-scenario
+description: Add a new gameplay benchmark and integration test scenario to content/scenarios/ and verify it with evr-mcp
+---
+
+# Add a benchmark scenario
+
+Every new gameplay feature should ship with a scenario in `content/scenarios/`
+that both validates its behavior as an integration test and measures its tick
+latency, entity load, and gameplay efficiency.
+
+1. Create `content/scenarios/<id>.ron`:
+   - Fields: `id`, `name`, `description`, optional `encounter_seed`,
+     `max_ticks`, and `steps: [...]`
+   - Combine high-level action steps (`FlyToPlanet`, `FlyToSystem`, `Land`,
+     `LiftOff`, `Trade`, `Respond`, `SetFlight`, `SetWarp`, `Advance`) with
+     assertion steps (`AssertDocked`, `AssertSystem`, `AssertCredits`,
+     `AssertCargo`, `AssertEncounter`, `AssertActiveQuests`,
+     `AssertCompletedQuest`, `AssertAlive`)
+   - Reference only valid system, planet, commodity, and quest IDs from
+     `content/`
+2. Add `"scenarios/<id>.ron"` to `scenarios:` in `content/manifest.ron`
+3. Validate content schema and cross-references:
+   `cargo test -p evr-data`
+4. Run the scenario as a benchmark and integration test:
+   `cargo run -p evr-mcp -- --bench <id>` (or `make bench`) and
+   `cargo test -p evr-mcp`
+5. Verify lints:
+   `cargo clippy --workspace --all-targets -- -D warnings`

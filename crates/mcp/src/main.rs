@@ -58,6 +58,13 @@ struct RespondArgs {
     choice: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RunScenarioArgs {
+    /// Optional scenario id from content/scenarios/ (omit to run all scenarios)
+    #[serde(default)]
+    id: Option<String>,
+}
+
 enum Command {
     Advance(u32),
     Observe,
@@ -77,6 +84,7 @@ enum Command {
         on: bool,
     },
     Respond(String),
+    RunScenario(Option<String>),
 }
 
 #[derive(Clone)]
@@ -190,6 +198,16 @@ impl GameMcp {
     async fn respond(&self, Parameters(RespondArgs { choice }): Parameters<RespondArgs>) -> String {
         self.call(Command::Respond(choice)).await
     }
+
+    #[tool(
+        description = "Run one or all benchmark scenarios from content/scenarios/ and return tick latency percentiles, entity load, and gameplay metrics as JSON."
+    )]
+    async fn run_scenario(
+        &self,
+        Parameters(RunScenarioArgs { id }): Parameters<RunScenarioArgs>,
+    ) -> String {
+        self.call(Command::RunScenario(id)).await
+    }
 }
 
 fn game_thread(content_root: PathBuf, mut rx: mpsc::Receiver<(Command, oneshot::Sender<String>)>) {
@@ -244,6 +262,13 @@ fn game_thread(content_root: PathBuf, mut rx: mpsc::Receiver<(Command, oneshot::
                 harness.advance(SETTLE_TICKS);
                 json(&harness.observe())
             }
+            Command::RunScenario(id) => {
+                match evr_mcp::run_scenarios(&content_root, id.as_deref()) {
+                    Ok(reports) => serde_json::to_string_pretty(&reports)
+                        .unwrap_or_else(|err| format!("serialize failed: {err}")),
+                    Err(err) => serde_json::json!({ "error": err }).to_string(),
+                }
+            }
         });
     }
 }
@@ -261,6 +286,25 @@ fn content_root() -> PathBuf {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(pos) = args.iter().position(|a| a == "--bench") {
+        let json_output = args.iter().any(|a| a == "--json");
+        let filter_id = args
+            .get(pos + 1)
+            .filter(|arg| !arg.starts_with("--"))
+            .map(String::as_str);
+        let reports = evr_mcp::run_scenarios(&content_root(), filter_id)?;
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&reports)?);
+        } else {
+            print!("{}", evr_mcp::format_markdown_table(&reports));
+        }
+        if reports.iter().any(|r| !r.passed) {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

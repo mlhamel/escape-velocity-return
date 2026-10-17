@@ -15,6 +15,7 @@ fn base_pack_loads() {
     assert_eq!(pack.systems.len(), 11);
     assert_eq!(pack.outfits.len(), 1);
     assert_eq!(pack.quests.len(), 4);
+    assert_eq!(pack.scenarios.len(), 3);
 
     let shuttle = pack.ship("shuttle").expect("shuttle exists");
     assert_eq!(shuttle.name, "Shuttle");
@@ -39,6 +40,11 @@ fn base_pack_loads() {
         .expect("newhaven-relief quest exists");
     assert_eq!(relief.giver, ("sol".to_owned(), "earth".to_owned()));
     assert_eq!(relief.reward_credits, 450);
+
+    let trade_scenario = pack
+        .scenario("sol-centauri-trade")
+        .expect("sol-centauri-trade scenario exists");
+    assert!(!trade_scenario.steps.is_empty());
 
     let blaster = pack.outfit("light-blaster").expect("light-blaster exists");
     let evr_data::OutfitKind::Weapon(weapon) = &blaster.kind;
@@ -256,6 +262,41 @@ fn missing_chief_portrait_is_rejected() {
             Err(ContentError::UnknownReference { kind: "asset", .. })
         ),
         "expected missing chief portrait rejection, got {result:?}"
+    );
+
+    fs::remove_dir_all(&dir).expect("temp dir must be removable");
+}
+
+#[test]
+fn unknown_scenario_reference_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("evr-data-scenario-test-{}", std::process::id()));
+    fs::create_dir_all(&dir).expect("temp dir must be creatable");
+    fs::write(
+        dir.join("manifest.ron"),
+        r#"( id: "t", name: "t", version: (0, 1, 0), ships: [], systems: ["a.ron"], outfits: [], scenarios: ["s.ron"] )"#,
+    )
+    .expect("manifest must be writable");
+    fs::write(
+        dir.join("a.ron"),
+        r#"( id: "a", name: "A", government: "independent", description: "", position: (0.0, 0.0), links: [], planets: [( id: "p", name: "P", description: "", commodities: [] )] )"#,
+    )
+    .expect("system must be writable");
+    fs::write(
+        dir.join("s.ron"),
+        r#"( id: "s1", name: "S", description: "", steps: [FlyToPlanet(system: "a", planet: "ghost", land: true)] )"#,
+    )
+    .expect("scenario must be writable");
+
+    let result = ContentPack::load_dir(&dir);
+    assert!(
+        matches!(
+            result,
+            Err(ContentError::UnknownReference {
+                kind: "scenario target planet",
+                ..
+            })
+        ),
+        "expected scenario target planet rejection, got {result:?}"
     );
 
     fs::remove_dir_all(&dir).expect("temp dir must be removable");

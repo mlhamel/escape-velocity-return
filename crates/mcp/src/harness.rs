@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bevy::app::PostUpdate;
 use bevy::prelude::*;
@@ -24,10 +24,21 @@ use evr_server::{
 #[derive(Resource, Default)]
 pub struct NoticeLog(pub Vec<String>);
 
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct TickSample {
+    pub server_us: u64,
+    pub client_us: u64,
+    pub total_us: u64,
+    pub server_entities: usize,
+    pub client_entities: usize,
+    pub projectiles: usize,
+}
+
 pub struct Harness {
     pub server: App,
     pub client: App,
     pub ticks: u64,
+    pub samples: Vec<TickSample>,
     client_socket: MemorySocketClient,
 }
 
@@ -64,6 +75,7 @@ impl Harness {
             server,
             client,
             ticks: 0,
+            samples: Vec::new(),
             client_socket,
         };
         let mut connect_steps = 0;
@@ -80,12 +92,35 @@ impl Harness {
         for _ in 0..10 {
             harness.step();
         }
+        harness.ticks = 0;
+        harness.samples.clear();
         harness
     }
 
     pub fn step(&mut self) {
+        let t0 = Instant::now();
         self.server.update();
+        let server_us = t0.elapsed().as_micros() as u64;
+        let t1 = Instant::now();
         self.client.update();
+        let client_us = t1.elapsed().as_micros() as u64;
+
+        let server_entities = self.server.world().entities().len() as usize;
+        let client_entities = self.client.world().entities().len() as usize;
+        let projectiles = {
+            let mut state = self.server.world_mut().query::<&Projectile>();
+            let world = self.server.world();
+            state.iter(world).count()
+        };
+        self.samples.push(TickSample {
+            server_us,
+            client_us,
+            total_us: server_us + client_us,
+            server_entities,
+            client_entities,
+            projectiles,
+        });
+
         std::thread::sleep(Duration::from_millis(15));
         self.ticks += 1;
     }
@@ -304,6 +339,11 @@ impl Harness {
             })
         });
 
+        let completed_quests = quests
+            .as_ref()
+            .map(|aq| aq.completed.clone())
+            .unwrap_or_default();
+
         let quests_json = quests
             .map(|aq| {
                 aq.quests
@@ -423,6 +463,7 @@ impl Harness {
             "market": market,
             "encounter": encounter_json,
             "quests": quests_json,
+            "completed_quests": completed_quests,
             "projectiles": projectile_count,
             "notices": notices,
         })

@@ -7,6 +7,7 @@ use crate::error::{ContentError, validate_asset, validate_ids, validate_referenc
 use crate::manifest::Manifest;
 use crate::outfit::OutfitDef;
 use crate::quest::{QuestDef, QuestKind};
+use crate::scenario::{ScenarioDef, ScenarioStep};
 use crate::ship::ShipDef;
 use crate::system::SystemDef;
 
@@ -17,6 +18,7 @@ pub struct ContentPack {
     pub systems: Vec<SystemDef>,
     pub outfits: Vec<OutfitDef>,
     pub quests: Vec<QuestDef>,
+    pub scenarios: Vec<ScenarioDef>,
 }
 
 impl ContentPack {
@@ -43,7 +45,12 @@ impl ContentPack {
             quests.push(parse_ron(&root.join(path))?);
         }
 
-        Self::validate(&ships, &systems, &outfits, &quests)?;
+        let mut scenarios: Vec<ScenarioDef> = Vec::with_capacity(manifest.scenarios.len());
+        for path in &manifest.scenarios {
+            scenarios.push(parse_ron(&root.join(path))?);
+        }
+
+        Self::validate(&ships, &systems, &outfits, &quests, &scenarios)?;
         Self::validate_sprites(root, &ships, &systems)?;
 
         Ok(Self {
@@ -52,6 +59,7 @@ impl ContentPack {
             systems,
             outfits,
             quests,
+            scenarios,
         })
     }
 
@@ -97,16 +105,25 @@ impl ContentPack {
         self.quests.iter().find(|quest| quest.id == id)
     }
 
+    pub fn scenario(&self, id: &str) -> Option<&ScenarioDef> {
+        self.scenarios.iter().find(|scenario| scenario.id == id)
+    }
+
     fn validate(
         ships: &[ShipDef],
         systems: &[SystemDef],
         outfits: &[OutfitDef],
         quests: &[QuestDef],
+        scenarios: &[ScenarioDef],
     ) -> Result<(), ContentError> {
         validate_ids("ship", ships.iter().map(|ship| ship.id.clone()))?;
         validate_ids("system", systems.iter().map(|system| system.id.clone()))?;
         validate_ids("outfit", outfits.iter().map(|outfit| outfit.id.clone()))?;
         validate_ids("quest", quests.iter().map(|quest| quest.id.clone()))?;
+        validate_ids(
+            "scenario",
+            scenarios.iter().map(|scenario| scenario.id.clone()),
+        )?;
 
         let outfit_ids: std::collections::HashSet<_> =
             outfits.iter().map(|o| o.id.clone()).collect();
@@ -138,6 +155,12 @@ impl ContentPack {
             .iter()
             .flat_map(|s| s.planets.iter().map(move |p| format!("{}/{}", s.id, p.id)))
             .collect();
+        let planet_ids: std::collections::HashSet<String> = systems
+            .iter()
+            .flat_map(|s| s.planets.iter().map(|p| p.id.clone()))
+            .collect();
+        let quest_ids: std::collections::HashSet<String> =
+            quests.iter().map(|q| q.id.clone()).collect();
 
         for quest in quests {
             let giver_ref = format!("{}/{}", quest.giver.0, quest.giver.1);
@@ -149,6 +172,30 @@ impl ContentPack {
                 }
                 QuestKind::Bounty { system, .. } => {
                     validate_reference("quest target system", system, &system_ids)?;
+                }
+            }
+        }
+
+        for scenario in scenarios {
+            for step in &scenario.steps {
+                match step {
+                    ScenarioStep::FlyToPlanet { system, planet, .. } => {
+                        let target_ref = format!("{system}/{planet}");
+                        validate_reference("scenario target planet", &target_ref, &planet_refs)?;
+                    }
+                    ScenarioStep::FlyToSystem { system } | ScenarioStep::AssertSystem(system) => {
+                        validate_reference("scenario system", system, &system_ids)?;
+                    }
+                    ScenarioStep::Land { planet } => {
+                        validate_reference("scenario planet", planet, &planet_ids)?;
+                    }
+                    ScenarioStep::AssertDocked(Some(planet)) => {
+                        validate_reference("scenario docked planet", planet, &planet_ids)?;
+                    }
+                    ScenarioStep::AssertCompletedQuest(quest_id) => {
+                        validate_reference("scenario quest", quest_id, &quest_ids)?;
+                    }
+                    _ => {}
                 }
             }
         }

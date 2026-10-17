@@ -1,0 +1,19 @@
+ScenarioDef(
+    id: "combat-dock-immunity",
+    name: "Combat Engagement & Planetary Dock Immunity",
+    description: "Warp to Alpha Centauri, exchange blaster fire near the pirate patrol zone, land on Newhaven, and verify docked ships cannot be damaged.",
+    max_ticks: 2500,
+    steps: [
+        AssertAlive(true),
+        FlyToSystem(system: "alpha-centauri"),
+        AssertSystem("alpha-centauri"),
+        SetFlight(throttle: 0.5, turn: 0.3, fire: true),
+        Advance(ticks: 30),
+        SetFlight(throttle: 0.0, turn: 0.0, fire: false),
+        FlyToPlanet(system: "alpha-centauri", planet: "newhaven", land: true),
+        AssertDocked(Some("newhaven")),
+        Advance(ticks: 40),
+        AssertAlive(true),
+        AssertDocked(Some("newhaven")),
+    ],
+)

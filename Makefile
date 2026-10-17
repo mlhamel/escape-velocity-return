@@ -13,14 +13,14 @@ PASS    ?= secret
 .PHONY: help \
 	build build-release build-core build-data build-protocol build-server build-client build-mcp \
 	test test-core test-data test-protocol test-server test-mcp test-playthrough \
-	check lint clippy fmt fmt-check commit-check hooks \
+	bench bench-json check lint clippy fmt fmt-check commit-check hooks \
 	run run-client run-online run-server run-server-ephemeral run-mcp \
 	tour capture-tour art placeholder-art clean
 
 ##@ General
 
 help: ## Show available targets and configurable variables
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m [PORT=3456] [DB=shard.db] [HOST=127.0.0.1:3456] [USER=pilot] [PASS=secret]\n"} \
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m [PORT=3456] [DB=shard.db] [HOST=127.0.0.1:3456] [USER=pilot] [PASS=secret] [SCENARIO=id]\n"} \
 		/^[a-zA-Z0-9_-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 } \
 		/^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
@@ -57,6 +57,12 @@ build-mcp: ## Build evr-mcp (MCP agent server)
 ##@ Testing & Verification
 
 check: fmt-check lint commit-check test ## Run full verification suite (fmt-check + clippy + commit-check + workspace tests)
+
+bench: ## Run gameplay benchmark scenarios and print Markdown table (optional SCENARIO=id)
+	$(CARGO) run -p evr-mcp -- --bench $(SCENARIO)
+
+bench-json: ## Run gameplay benchmark scenarios and print JSON report (optional SCENARIO=id)
+	$(CARGO) run -p evr-mcp -- --bench $(SCENARIO) --json
 
 commit-check: ## Verify git history follows Conventional Commits (via cocogitto)
 	@if command -v cog >/dev/null 2>&1; then \

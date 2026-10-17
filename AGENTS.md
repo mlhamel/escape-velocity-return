@@ -9,6 +9,7 @@ single-player.
 
 - build: `cargo build --workspace`
 - test: `cargo test --workspace` (single crate: `cargo test -p evr-core`)
+- benchmark scenarios: `make bench` or `cargo run -p evr-mcp -- --bench [scenario_id] [--json]`
 - lint: `cargo clippy --workspace -- -D warnings`
 - format: `cargo fmt --all` (check: `cargo fmt --all --check`)
 - commit check: `cog check` or `make commit-check` (install git hooks: `make hooks` / `cog install-hook --all`)
@@ -26,7 +27,7 @@ single-player.
 - `crates/server` — authoritative simulation app; storage trait + SQLite persistence; login gate
 - `crates/client` — Bevy desktop app
 - `crates/mcp` — evr-mcp: the game as an MCP server (agents play the sim
-  via observe/set_flight/land/lift_off/trade/jump/advance); registered as
+  via observe/set_flight/land/lift_off/trade/jump/advance/run_scenario); registered as
   evr-game in opencode.json
 - `content/` — RON content packs; data, never code
 - `assets/` — textures referenced by content sprite fields; placeholders generated via ops/generate_placeholder_art.py (see docs/gdd/art-guide.md)
@@ -40,7 +41,8 @@ single-player.
 
 ## Conventions
 
-- Content is data in `content/`, never code. Use the add-ship/add-system skills.
+- Content is data in `content/`, never code. Use the add-ship/add-system/add-quest/add-scenario skills.
+- Every new gameplay feature must ship with a benchmark & integration test scenario in `content/scenarios/` (see `.opencode/skills/add-scenario/SKILL.md`).
 - Server is authoritative. Clients send intents (`crates/protocol`); they never
   mutate game state.
 - Offline play = the client embeds the server app (NonSendMut in evr-client) over a memory

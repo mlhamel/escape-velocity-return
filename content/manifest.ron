@@ -29,4 +29,9 @@
         "quests/urgent-vega-vaccine.ron",
         "quests/centauri-pirate-bounty.ron",
     ],
+    scenarios: [
+        "scenarios/sol-centauri-trade.ron",
+        "scenarios/quest-delivery-loop.ron",
+        "scenarios/combat-dock-immunity.ron",
+    ],
 )
